@@ -54,6 +54,9 @@
   检查，只能靠运行时断言兜住。全程假路由注入，不碰网络与真实凭据；
 - `scripts/verify-uxv11-e2e.mjs` / `verify-uxv12-escape.mjs` / `verify-gemini-429.mjs`
   三处 `ROOT` 补默认值，不再需要手传入参即可跑；
+- `npm run verify:live`（`scripts/verify-uxv14-live.mjs`）：对着跑着的宿主验
+  `patch` 是否已是 `ux-v14`、每条有当日桶的路由是否把 `expiring`/`expiringAt`
+  报全——静态断言全绿只证明磁盘改了，证明不了进程加载了新模块；
 - README 的路由数 / 模型数 / 套餐数 / 配置键表 / 端点表与代码对齐，图床缺失的头图移除。
 
 ## ux-v13（历史）
