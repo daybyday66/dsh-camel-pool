@@ -1,7 +1,5 @@
 # 驼峰积分池 · dsh-camel-pool
 
-![三家免费额度，一个模型下拉](assets/social-preview.png)
-
 **从「渠道中心」(`dsh-connect`) 整包独立出来的单独插件。** 自带积分池剩余额度显示面板、自动签到、多渠道聚合模型下拉。后续可以继续往池子里添加更多渠道来扩充模型选择，不再依赖 `dsh-workbuddy-trae-qoder-connect`。
 
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -25,7 +23,7 @@
 
 | 端点 | 用途 |
 |---|---|
-| `GET /plugins/dsh-pool/status` | 积分池状态：`credits.total`、`pool.routes[6]`、`models[41]`、`pool.order`、`pool.broken` |
+| `GET /plugins/dsh-pool/status` | 积分池状态：`credits.total`、`pool.routes[10]`、`models[28]`、`pool.order`、`pool.broken` |
 | `GET /plugins/dsh-connect/status` | 渠道聚合状态（4 渠道 signed-in / credits / checkin.state） |
 | `POST /plugins/dsh-connect/checkin` | 一键签到（全部渠道） |
 | `POST /plugins/dsh-connect/checkin/<id>` | 单渠道签到 |
@@ -41,8 +39,8 @@
 **独立的积分池剩余额度面板（本包新增，UX v2）。** 侧栏常驻一个「驼峰积分池」入口（`sidebar.footer.action`，`order: 21`），按钮上带状态点与额度摘要，点开是自己的浮层面板，独立于渠道中心面板：
 
 - 大字显示 `credits.total`（例如 `9,318.21`）；`role="status" aria-live="polite"` 状态条区分「刷新中 / 已更新 / 数据过期 / 请求失败（带重试）」，绝对时间 + 相对时间（`justNow` / `secondsAgo`）；
-- 6 条池路由各自的 `remaining`、`priority`、`voucher`、额度占比条，低额度（`<500`）、探测失败、代金券、熔断分别打标记；
-- 47 个套餐账户明细**默认折叠 8 项** + 搜索框 + 「展开全部」，避免刷屏；当前 `models` 数、`pool.broken`、内核 `patch` 指纹与抓取时间；
+- 每条池路由各自的 `remaining`、`expiring`、`priority`、`voucher`、额度占比条，低额度（`<500`）、探测失败、代金券、熔断分别打标记；
+- 各账号套餐明细**默认折叠 8 项** + 搜索框 + 「展开全部」，避免刷屏（条数随后续账号增减，不在文档里写死）；当前 `models` 数、`pool.broken`、内核 `patch` 指纹与抓取时间；
 - 「刷新」按钮走 `?refresh=1` 强制重取额度；面板打开时每 120s 自动轮询，**页面切到后台暂停、切回来立即补刷**；
 - 「一键签到」按钮 `POST /plugins/dsh-connect/checkin`，带 busy/done/failed 反馈态；「自动签到」开关直接 `POST /plugins/dsh-connect/settings` 改 `autoCheckin`，`aria-pressed` 显示开关状态；
 - 「复制摘要」把额度/路由/内核指纹写进剪贴板（真实换行）；`prefers-reduced-motion` 下关闭动效。
@@ -54,7 +52,7 @@
 | 短板（首版） | UX v2 |
 |---|---|
 | 侧栏与弹窗各发一份请求、数字会打架 | 模块级 `shared` + `listeners` + 单例 `inFlight`，两份视图共用一份状态；首屏只发 1 次 status，打开弹窗才补 1 次 `?refresh=1` |
-| 47 个套餐全量铺开 | 搜索 + 默认折叠 8 项 + 展开全部 |
+| 全部套餐行全量铺开 | 搜索 + 默认折叠 8 项 + 展开全部 |
 | 错误 / 关闭 / 过期态没区分 | `aria-live` 状态条、stale 阈值 300s、错误重试按钮、12s `AbortController` 超时 |
 | 签到反馈弱、自动签到状态不可见 | 一键签到 busy/done/failed 三段反馈 + 自动签到开关读 `/settings` 并可写回 |
 | 无焦点管理与键盘可达 | `role="dialog" aria-modal`、首按钮自动 `data-dcp-autofocus`、Tab 焦点环、Escape 关闭、关闭后焦点还回侧栏按钮、`:focus-visible` 描边 |
@@ -65,9 +63,21 @@
 
 **自动签到。** 沿用原机制：客户端所有 `useHubStatus()` 调用统一带 `?auto=1`（`lib/client.js` 的 `fetch(\`${STATUS_PATH}?auto=1\`)`），宿主 `lib/panel.js` 的 status handler 判 `prefsNow.autoCheckin === true && url.includes("auto=1")`，在扇出 `probeAll(..., { autoCheckin: auto })` 时顺带幂等领取当天可领积分。**没有额外定时器**，重复打开只领一次、不重复扣分。偏好项 `autoCheckin` 默认 `true`，可在设置里关掉（新额度面板的开关也写这个键）。新额度面板**刻意不触发第二次 `?auto=1`**，只读 `/plugins/dsh-pool/status`（首屏不带 refresh，打开弹窗时补一次 `?refresh=1`），避免并发重复 claim。
 
-**一个下拉装下三家 + 池。** WorkBuddy（国区/国际版多槽位）、Qoder CN、Trae CN 的免费额度合进一个模型列表，按渠道分组旁标积分倍率；`dsh-pool` 作为第 4 组出现，含 `hy4free` 等 41 个模型。中途换渠道历史不断。三家协议（OpenAI 方言 / 私有 agent 协议 / 自定义编码流）由本包在中间翻译。
+**一个下拉装下三家 + 池。** WorkBuddy（国区/国际版多槽位）、Qoder CN、Trae CN 的免费额度合进一个模型列表，按渠道分组旁标积分倍率；`dsh-pool` 作为独立一组出现，含 `hy4free` 等 28 个模型（叠加 CodeArts 5 个 + Gemini 6 个，与老渠道同 id 的自动合并成一条）。中途换渠道历史不断。三家协议（OpenAI 方言 / 私有 agent 协议 / 自定义编码流）由本包在中间翻译。
 
 **池调度。** `order: "credits-first"` 按剩余额度挑路由（可切 `voucherFirst` 让百炼券殿后）；402/429 自动 latch 熔断 60s 换下一条；`xhigh` → `max` 档位降级；真实请求写 `.pool-route.log`，只记 `tokenLen` 不含任何凭据。
+### 当日额度优先（`poolBurnExpiringFirst`，默认开）
+
+CodeArts 的每日签到 100 积分**当天 24:00 过期**，过期即归零。只按「套餐期末」排序时，池会把它和几天之后才到期的余额一视同仁，签到分常常烧不掉。
+
+现在排序吃第二个信号：
+
+- 适配层在 `credits()` 的 `doc.credits` 里多报两个字段 `expiring`（当日将过期余额合计）与 `expiringAt`（过期时刻，此处是本地当日 24:00 对应的 UTC 时间）；
+- 池内核 `extractCredits` 把它收进 credit；有当日桶时 `expiryMs` 取 `min(套餐期末, 当日过期时刻)`，于是这条路由在「最早过期优先」里天然排到最前；
+- `orderedRoutesFor` 额外做一次「latch 让位」：粘性 latch 原本压过一切排序，会把请求按在上一条路由上、继续烧掉长期额度。现在只要头部还有当日桶，latch 就退到当日桶之后（`burnExpiringFirst: false` 可关掉这个让位）；
+- 每次走完一条路由都会 `invalidateCredits()`，当日桶还有剩就立刻强制刷新积分，下一次排序读到的是真实剩余，而不是 5 分钟前的缓存。
+
+100 分烧完之后 `expiring` 归 0、`expiryMs` 回到套餐期末，这条路由自然落回原位——**静默切换不需要任何特判**，全部由排序表达。
 
 ---
 
@@ -77,14 +87,19 @@
 |---|---|---|
 | `autoCheckin` | `true` | 打开面板/侧栏时幂等领取当天签到 |
 | `showDockButton` | `true` | 左侧栏显示渠道中心入口 |
-| `hiddenChannels` | `[]` | 隐藏渠道 |
-| `disabledChannels` | `[]` | 禁用渠道 |
+| `hiddenChannels` | `[]` | 隐藏渠道（只影响展示，不影响参与） |
+| `disabledChannels` | `[]` | 禁用渠道（真正下架其模型） |
 | `disabledModels` | `[]` | 禁用模型 |
 | `useMaximumContextWindow` | `true` | 上游声明多档窗口时取最大档 |
 | `poolEnabled` | `true` | 积分池适配器开关（判默认用 `!== false`） |
 | `poolVoucherFirst` | `false` | 切换 `pool.order`：券优先 / 额度优先 |
+| `poolMergeModels` | `true` | 合并不同渠道的同名模型（关掉后各渠道单独可选，便于绕开失灵路由） |
+| `poolCostFirst` | `false` | 模型列表按性价比排序（免费优先，其余按倍率升序） |
+| `poolShowRoutes` | `false` | 在模型名后标注来源渠道 |
+| `poolAutoBoostEffort` | `false` | 低额度时自动把推理档位提到 `xhigh` |
+| `poolBurnExpiringFirst` | `true` | 当日即将过期的额度优先烧（见「当日额度优先」一节） |
 
-`poolEnabled`、`poolVoucherFirst` 是 `.volatile()` 字段，切换即时生效、不落盘。改这 3 个模型/渠道相关键要触发 `deps.onModelsChanged?.()` → `ctx.emit("llm/adapters-updated")`。设置写入走 `settingsApi.update(HUB_SETTINGS_NS, patch)`，`HUB_SETTINGS_NS` 已改成 `dsh-camel-pool`，与 profile 条目 id 同源，否则会报 `No configurable plugin entry "dsh-connect"`。
+`poolEnabled`、`poolVoucherFirst`、`poolMergeModels`、`poolCostFirst`、`poolShowRoutes`、`poolAutoBoostEffort`、`poolBurnExpiringFirst` 都是 `.volatile()` 字段，切换即时生效、不落盘。改模型/渠道相关键会触发 `deps.onModelsChanged?.()` → `ctx.emit("llm/adapters-updated")`。写入走白名单（`lib/panel.js` 的 settings handler），不在表里的键一律丢弃。设置写入走 `settingsApi.update(HUB_SETTINGS_NS, patch)`，`HUB_SETTINGS_NS` 已改成 `dsh-camel-pool`，与 profile 条目 id 同源，否则会报 `No configurable plugin entry "dsh-connect"`。
 
 ---
 
@@ -169,7 +184,7 @@ registerPoolRoute({
 ## 验收清单（规格 8.4）
 
 1. `lib/**/*.js` 与 `scripts/**/*.mjs` 全部 `node --check` 通过；
-2. `GET /plugins/dsh-pool/status` 200，`routes=6`、`models=41`、`pool.broken=[]`、`active=true`；
+2. `GET /plugins/dsh-pool/status` 200，`routes=10`、`models=28`、`pool.broken=[]`、`active=true`；
 3. `?refresh=1` 后 `credits.total ≈ 9318.21`；
 4. `GET /plugins/dsh-connect/status` 4 渠道 `signed-in`、`issues:0`；
 5. 模型选择器出现 `dsh-pool` 分组，含 `hy4free`；
