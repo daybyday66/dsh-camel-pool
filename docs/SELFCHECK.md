@@ -19,8 +19,15 @@
 | P3-8 | normalizeEntry 放行写法脆 | fixed | `CHANNEL_KINDS` 带 `idPattern`，校验收敛到 `channelIdMatches`。见 ux-v14 |
 | P3-9 | 在线端点 404（部署态） | fixed | 重启宿主后 5 个端点全部 200 |
 
-`fixed` 项的复跑命令是 `npm run check`（语法 + 契约断言，含针对上表的负向断言，
-例如「注册表不再内联 workbuddy 正则」「codearts 不再把窗口写成 0」）。
+`fixed` 项的复跑命令是 `npm run check`，它现在是两级：
+
+- `scripts/check-all.mjs` —— 25 个文件 `node --check` + 33 条契约断言，
+  含针对上表的负向断言（例如「codearts 不再把窗口写成 0」「面板不再内联单例判断」）；
+- `scripts/check-pool-core.mjs` —— 真 import 真跑的 10 项池内核断言
+  （当日桶排队、latch 让位、`expiring=0` 不误判、状态字段透出）。
+  静态断言抓不住 `??` 写成 `||` 这类改动，所以运行时那一层不能省。
+
+只想跑一半时用 `npm run check:syntax` / `npm run check:core`。
 > 后续变更：CodeArts 输入框下方状态行与两个显示开关（`codeartsShowCredits` / `codeartsShowQueue`）
 > 已按用户要求整体移除，本报告里涉及它们的段落仅作历史记录。
 > 路径约定：下文路径均相对 `dsh-camel-pool/`，行号为当前落盘版本。
