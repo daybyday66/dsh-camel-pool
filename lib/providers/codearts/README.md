@@ -109,9 +109,10 @@ CodeArts 用 APIG `SDK-HMAC-SHA256` 对**请求体原文**签名。本实现让�
 **新增路由需要重启 DSH 桌面端**（主 `README.md:130`）。重启后：
 
 ```bash
-curl -s http://127.0.0.1:10233/plugins/dsh-pool/status | jq '.codearts, .codeartsAuth'
-curl -s http://127.0.0.1:10233/plugins/dsh-pool/codearts-oauth | jq .
-curl -s http://127.0.0.1:10233/plugins/dsh-connect/codearts/status | jq .
+PORT=13836   # 宿主端口会变，从 GUI 地址栏取当前值
+curl -s http://127.0.0.1:$PORT/plugins/dsh-pool/status | jq '.codearts, .codeartsAuth'
+curl -s http://127.0.0.1:$PORT/plugins/dsh-pool/codearts-oauth | jq .
+curl -s http://127.0.0.1:$PORT/plugins/dsh-connect/codearts/status | jq .
 ```
 
 未登录时 `codeartsAuth.loggedIn=false`、这 5 个模型照常出现在 `dsh-pool` 分组；
