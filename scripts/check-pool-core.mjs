@@ -93,7 +93,22 @@ ok("latch 让位给当日额度", latched[0] === "codearts" && latched[1] === "q
 const legacy = orderedRoutesFor(MODEL, { burnExpiringFirst: false }).map((item) => item.routeKey);
 ok("burnExpiringFirst=false 保留旧粘性行为", legacy[0] === "qoder", legacy);
 
-// ⑦ 状态接口要能把这两个字段透出去（面板就是靠它们画「当日将过期」）
+// ⑦ only：只刷指定路由。成功服务后如果 force 全池，10 条路由就是 10 次上游请求，
+//    而那时只有刚服务过的那条余额真的变了。
+let traeHits = 0;
+const traeRoute = { ...fakeRoute("trae", 1, { status: "signed-in", credits: { remaining: 1, total: 2 } }) };
+traeRoute.credits = async () => {
+  traeHits += 1;
+  return { status: "signed-in", credits: { remaining: 1, total: 2 } };
+};
+const releaseTrae2 = registerPoolRoute(traeRoute);
+await refreshPoolCredits({ force: true, only: ["codearts"] });
+ok("only 只刷指定路由", traeHits === 0, traeHits);
+await refreshPoolCredits({ force: true });
+ok("不带 only 时全刷", traeHits === 1, traeHits);
+releaseTrae2();
+
+// ⑧ 状态接口要能把这两个字段透出去（面板就是靠它们画「当日将过期」）
 const doc = await poolStatusDocument({ refresh: false });
 const row = (doc.pool?.routes ?? []).find((item) => item.key === "codearts");
 ok("status 行带 expiring", row?.expiring === 70.03, row?.expiring);

@@ -12,7 +12,8 @@
   于是该路由在「最早过期优先」里自然排第一；
 - `orderedRoutesFor` 新增 latch 让位：头部还有当日桶时，粘性 latch 退到当日桶之后
   （`poolBurnExpiringFirst: false` 可关，关掉完全回到旧行为）；
-- 服务成功后 `invalidateCredits()` + 当日桶有剩则强制刷新积分，下一次排序读到真实剩余；
+- 服务成功后 `invalidateCredits()` + 当日桶有剩则强制刷新积分（`refreshPoolCredits({ force: true, only: [routeKey] })`
+  只刷这一条——force 全池等于每个成功请求都打一轮上游），下一次排序读到真实剩余；
 - 面板新增「当日积分优先」开关（默认开），状态文档 `pool.routes[]` 多两个字段
   `expiring` / `expiringAt`。
 
@@ -48,7 +49,7 @@
 ### 工程化
 
 - `npm run check` = `check-all.mjs`（25 个文件语法检查 + 33 条契约断言）
-  + `check-pool-core.mjs`（10 项池内核运行时断言）；
+  + `check-pool-core.mjs`（12 项池内核运行时断言）；
 - `scripts/check-pool-core.mjs` 是真 import 真跑：当日桶排队、latch 让位、
   `expiring=0` 不误判、状态文档字段透出——这些改一个 `??` 成 `||` 照样过静态
   检查，只能靠运行时断言兜住。全程假路由注入，不碰网络与真实凭据；
