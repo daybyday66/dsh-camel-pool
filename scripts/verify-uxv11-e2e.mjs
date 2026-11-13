@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const ROOT = process.argv[2];
+const ROOT = process.argv[2] || process.cwd();
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-uxv11-"));
 fs.writeFileSync(path.join(tmp, "gemini-ca-project.json"), JSON.stringify({ projectId: "test-project-uxv11" }));
 process.env.DSH_HOME = tmp;

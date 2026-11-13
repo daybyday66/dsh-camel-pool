@@ -2,7 +2,7 @@
 import http from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-const ROOT=process.argv[2];
+const ROOT=process.argv[2] || process.cwd();
 // 假 OAuth 上游：一律 429 RESOURCE_EXHAUSTED（模拟 project 配额耗尽）
 const fake=await new Promise((resolve)=>{
   const srv=http.createServer((req,res)=>{

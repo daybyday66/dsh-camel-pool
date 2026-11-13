@@ -22,6 +22,12 @@
     "node": "^22.19.0 || >=24.0.0"
   },
   "main": "lib/index.js",
+  "scripts": {
+    "check": "node scripts/check-all.mjs && node scripts/check-pool-core.mjs",
+    "check:syntax": "node scripts/check-all.mjs",
+    "check:core": "node scripts/check-pool-core.mjs",
+    "verify": "node scripts/verify-uxv10.mjs"
+  },
   "exports": {
     ".": {
       "default": "./lib/index.js"

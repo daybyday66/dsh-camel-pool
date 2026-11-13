@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const ROOT = process.argv[2];
+const ROOT = process.argv[2] || process.cwd();
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-gemini-verify-'));
 fs.writeFileSync(path.join(tmp, 'gemini-ca-project.json'), JSON.stringify({ projectId: 'test-project-429' }));
 process.env.DSH_HOME = tmp;
