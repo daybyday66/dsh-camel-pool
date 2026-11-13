@@ -1,0 +1,4 @@
+const SHIM=process.argv[2], TOKEN=process.argv[3];
+const models=["gemini-3.5-flash-lite","gemini-3.8-flash","gemini-3.5-pro","gemini-3.1-pro-high"];
+console.log("@ "+new Date().toISOString()+"  (上游当前是好窗口, 验证池是否仍熔断锁死)");
+for(const m of models){const t=Date.now();try{const r=await fetch(SHIM+"/v1/chat/completions",{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+TOKEN},body:JSON.stringify({model:m,messages:[{role:"user",content:"Reply just OK."}],max_tokens:16,stream:false}),signal:AbortSignal.timeout(30000)});const txt=await r.text();let msg=txt.replace(new RegExp(String.fromCharCode(92)+"s+","g")," ").slice(0,110);console.log("  "+m.padEnd(24)+" "+r.status+" "+(Date.now()-t)+"ms "+msg);}catch(e){console.log("  "+m.padEnd(24)+" ERR "+e.name+" "+(Date.now()-t)+"ms");}}

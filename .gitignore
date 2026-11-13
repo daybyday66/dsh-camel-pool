@@ -1,0 +1,11 @@
+node_modules/
+%SystemDrive%/
+*.bak
+*.bak-*
+*.dbg.mjs
+*.log
+_pool*.json
+SELFCHECK.md
+scripts/reverse-verify-bugfix.mjs
+scripts/sync-to-profile.mjs
+.DS_Store
