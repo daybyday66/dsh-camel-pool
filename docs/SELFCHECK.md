@@ -18,16 +18,23 @@
 | P3-7 | 双积分数据源 | recorded | 实为同一 60s 缓存，仅 detail 字段拍平后命名不一致；不做合并，改为按此结论解释 |
 | P3-8 | normalizeEntry 放行写法脆 | fixed | `CHANNEL_KINDS` 带 `idPattern`，校验收敛到 `channelIdMatches`。见 ux-v14 |
 | P3-9 | 在线端点 404（部署态） | fixed | 重启宿主后 5 个端点全部 200 |
+| P3-10 | codearts 调用 `isIamTokenError()` 但没 import | fixed | 补导入；新增 `scripts/check-imports.mjs` 把同类漏导入变成提交即红 |
 
-`fixed` 项的复跑命令是 `npm run check`，它现在是两级：
+`fixed` 项的复跑命令是 `npm run check`，它现在是三级，对应三类「静态看不出、只有某一层能看见」的错误：
 
-- `scripts/check-all.mjs` —— 25 个文件 `node --check` + 33 条契约断言，
+- `scripts/check-all.mjs` —— 25 个文件 `node --check` + 36 条契约断言，
   含针对上表的负向断言（例如「codearts 不再把窗口写成 0」「面板不再内联单例判断」）；
-- `scripts/check-pool-core.mjs` —— 真 import 真跑的 10 项池内核断言
-  （当日桶排队、latch 让位、`expiring=0` 不误判、状态字段透出）。
+- `scripts/check-imports.mjs` —— 把 `engine.js` 重导出的 53 个可读名当白名单，扫 `lib/`
+  每个文件的代码区（注释与字符串先剥掉）有没有裸引用却既没 import 也没本地声明。
+  抓的是「语法对、跑正常路径也对，只有走到某个分支才 ReferenceError」这一类（P3-10）；
+- `scripts/check-pool-core.mjs` —— 真 import 真跑的 12 项池内核断言
+  （当日桶排队、latch 让位、`expiring=0` 不误判、状态字段透出、`only` 只刷指定路由）。
   静态断言抓不住 `??` 写成 `||` 这类改动，所以运行时那一层不能省。
 
-只想跑一半时用 `npm run check:syntax` / `npm run check:core`。
+只想跑一部分时用 `npm run check:syntax` / `npm run check:imports` / `npm run check:core`。
+
+实机那一层是 `npm run verify:live`：不传端口时自动在最近出现过的宿主端口里找活的那个，
+验 `patch` 标记是否已是当前内核版本、每条有当日桶的路由是否把 `expiring`/`expiringAt` 报全。
 > 后续变更：CodeArts 输入框下方状态行与两个显示开关（`codeartsShowCredits` / `codeartsShowQueue`）
 > 已按用户要求整体移除，本报告里涉及它们的段落仅作历史记录。
 > 路径约定：下文路径均相对 `dsh-camel-pool/`，行号为当前落盘版本。

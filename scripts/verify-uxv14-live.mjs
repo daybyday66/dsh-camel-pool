@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 // verify-uxv14-live.mjs —— 宿主重启后的实机回归（只在真有账号/宿主时跑）。
 //
-// 用法: node scripts/verify-uxv14-live.mjs [PORT]（默认 13836，从 GUI 地址栏取当前值）
+// 用法: node scripts/verify-uxv14-live.mjs [PORT]
+//   不传 PORT 时自动在最近出现过的宿主端口里找活的那个（宿主每次重启端口都会变，
+//   13836 / 10679 / 13347 / 6854 / 10233 都当过端口，写死一个必然过两天就失效）。
 //
 // 与 check-pool-core.mjs 的分工：那个用假路由证明内核逻辑对，这个证明
 // 「宿主真的加载了新代码」——静态断言全绿也可能只是磁盘改了、进程还跑着旧模块。
 import http from "node:http";
 
-const PORT = Number(process.argv[2]) || Number(process.env.PORT) || 13836;
 const PATH = "/plugins/dsh-pool/status";
+const KNOWN_PORTS = [13836, 10679, 13347, 6854, 10233, 9229];
+const EXPLICIT = Number(process.argv[2]) || Number(process.env.PORT) || 0;
 
 function get(port, path) {
   return new Promise((resolve, reject) => {
@@ -30,15 +33,28 @@ function ok(label, cond, extra) {
   console.error("[live] FAIL: " + label + (extra === undefined ? "" : "  " + JSON.stringify(extra)));
 }
 
-let res;
-try {
-  res = await get(PORT, PATH);
-} catch (error) {
-  console.error("[live] 连不上 http://127.0.0.1:" + PORT + PATH + " —— " + error.message);
-  console.error("       宿主没开，或端口变了（从 GUI 地址栏取；13347 / 6854 / 10233 / 13836 都出现过）");
+/** 先从当前 GUI 地址栏传的端口取，没传就扫已知端口找活的池端点。 */
+async function connect() {
+  const tried = [];
+  for (const port of EXPLICIT ? [EXPLICIT] : KNOWN_PORTS) {
+    try {
+      const res = await get(port, PATH);
+      if (res.status === 200) {
+        if (!EXPLICIT) console.log("[live] 自动发现宿主端口 " + port);
+        return { port, res };
+      }
+      tried.push(port + "→HTTP " + res.status);
+    } catch (error) {
+      tried.push(port + "→" + (error.code || error.message));
+    }
+  }
+  console.error("[live] 找不到活着的宿主端点：" + tried.join(", "));
+  console.error("       要么宿主没开，要么端口在别处 —— 从 GUI 地址栏取端口后作为第一个参数传入。");
   process.exit(2);
 }
-ok("状态接口可达 (" + res.status + ")", res.status === 200, res.body.slice(0, 200));
+
+const { port: PORT, res } = await connect();
+ok("状态接口可达 (" + res.status + " @ " + PORT + ")", res.status === 200, res.body.slice(0, 200));
 
 let doc;
 try {
@@ -48,7 +64,7 @@ try {
   process.exit(2);
 }
 
-ok("内核标记已是 ux-v14（否则宿主仍在跑旧模块，重启后再验）", doc.patch === "ux-v14", doc.patch);
+ok("内核标记已是 ux-v15（否则宿主仍在跑旧模块，重启后再验）", doc.patch === "ux-v15", doc.patch);
 
 const routes = doc.pool?.routes ?? [];
 ok("路由表非空", routes.length > 0, routes.length);
@@ -73,4 +89,4 @@ if (failed > 0) {
   console.error("\nverify-uxv14-live: " + failed + " 项失败");
   process.exit(1);
 }
-console.log("\nverify-uxv14-live: 全部通过（内核 ux-v14 已在线）");
+console.log("\nverify-uxv14-live: 全部通过（内核 ux-v15 已在线）");

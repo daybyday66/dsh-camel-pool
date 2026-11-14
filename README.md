@@ -157,7 +157,7 @@ registerPoolRoute({
 });
 ```
 
-注册完 `onPoolRoutesChanged` 会自动 `ctx.emit("llm/adapters-updated")`，模型下拉立刻出现新分组；`pool.status` 的 `routes[]` 也会多一条。参照现有 6 条：`workbuddy:workbuddy1/2/4`、`trae`、`qoder`、`bailian`（`providerId: "aliyun-bailian"`, `priority: 9`, `voucher` 殿后）。渠道侧的适配器同样在 `lib/index.js` 的渠道循环里按 `PROVIDERS` 追加即可。
+注册完 `onPoolRoutesChanged` 会自动 `ctx.emit("llm/adapters-updated")`，模型下拉立刻出现新分组；`pool.status` 的 `routes[]` 也会多一条。参照现有 10 条（按 `priority` 升序）：`qiniu`(-1，合成余额)、`workbuddy:workbuddy1`/`workbuddy2`(0)、`trae`/`trae2`(1)、`qoder1`/`qoder2`(2)、`gemini`/`codearts`(3)、`bailian`(9，`providerId: "aliyun-bailian"`，`voucher: true` 强制殿后)。渠道侧的适配器同样在 `lib/index.js` 的渠道循环里按 `PROVIDERS` 追加即可。
 
 **路线 A（后续升级）**：若想把池内核真正拆成一个独立 npm 包、由多个插件共享同一份状态，用 `globalThis[Symbol.for("dsh-pool.state.v1")]` 做跨包单例（规格 8.3 首选方案），避免两份内核各自维护 latches/credits 缓存。当前路线 B 已满足独立化目标，暂不需要。
 

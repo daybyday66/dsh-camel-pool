@@ -80,8 +80,22 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v14"', "内核版本标记已升 ux-v14");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v15"', "内核版本标记已升 ux-v15");
+// 设置写入白名单必须覆盖 schema 里所有可切换键 —— 漏一个的后果是面板开关点了 400
+// no-whitelisted-field，而客户端把 400 当"失败保留原值"，用户看到开关弹回去、
+// 却没有任何错误提示。这类漏键只能靠静态比对。
+mustContain(path.join(ROOT, "lib/panel.js"), 'safe.poolAutoBoostEffort = patch.poolAutoBoostEffort', "白名单含 poolAutoBoostEffort");
+mustContain(path.join(ROOT, "lib/panel.js"), 'safe.disabledChannels = patch.disabledChannels', "白名单含 disabledChannels");
+mustContain(path.join(ROOT, "lib/panel.js"), 'safe.disabledModels = patch.disabledModels', "白名单含 disabledModels");
 mustContain(path.join(ROOT, "lib/panel.js"), "poolBurnExpiringFirst", "面板暴露当日优先开关");
+// 漏导入防线：codearts 适配层必须真的导入 isIamTokenError（曾漏过，运行时才炸）。
+mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "  isIamTokenError,", "codearts 导入 isIamTokenError 判定式");
+if (!fs.existsSync(path.join(ROOT, "scripts/check-imports.mjs"))) {
+  failed++;
+  console.error("CONTRACT FAIL: 缺少 scripts/check-imports.mjs —— 漏导入无静态防线");
+} else {
+  console.log("[contract] ok: 漏导入静态检查在位 (scripts/check-imports.mjs)");
+}
 
 // CHANGELOG 必须存在且覆盖当前内核版本。
 const changelogPath = path.join(ROOT, "CHANGELOG.md");
@@ -90,9 +104,9 @@ if (!fs.existsSync(changelogPath)) {
   console.error("CONTRACT FAIL: 缺少 CHANGELOG.md —— 内核版本无处可查");
 } else {
   const log = fs.readFileSync(changelogPath, "utf8");
-  if (!log.includes("ux-v14")) {
+  if (!log.includes("ux-v15")) {
     failed++;
-    console.error("CONTRACT FAIL: CHANGELOG.md 未记录 ux-v14");
+    console.error("CONTRACT FAIL: CHANGELOG.md 未记录 ux-v15");
   } else {
     console.log("[contract] ok: CHANGELOG 覆盖当前内核版本 (CHANGELOG.md)");
   }

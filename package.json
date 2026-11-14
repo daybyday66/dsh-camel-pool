@@ -23,8 +23,9 @@
   },
   "main": "lib/index.js",
   "scripts": {
-    "check": "node scripts/check-all.mjs && node scripts/check-pool-core.mjs",
+    "check": "node scripts/check-all.mjs && node scripts/check-imports.mjs && node scripts/check-pool-core.mjs",
     "check:syntax": "node scripts/check-all.mjs",
+    "check:imports": "node scripts/check-imports.mjs && node scripts/check-imports.mjs --selftest",
     "check:core": "node scripts/check-pool-core.mjs",
     "verify": "node scripts/verify-uxv10.mjs",
     "verify:live": "node scripts/verify-uxv14-live.mjs"

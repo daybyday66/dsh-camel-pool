@@ -3,6 +3,33 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## ux-v15（2026-11-14）
+
+### 修复：设置写入白名单漏键
+
+- POST `/plugins/dsh-connect/settings` 的白名单漏了 schema 里可切换的
+  `poolAutoBoostEffort` / `disabledChannels` / `disabledModels`：面板
+  「切换模型自动提档」开关一点就 400 `no-whitelisted-field`，客户端把 400 当失败
+  静默回弹、无任何错误提示（实机 curl 复现，修后 200）；
+- 补齐三键（数组键沿用归一规则：channels 只要 string，models 还要含 `/`），
+  三者写入后会触发 `onModelsChanged` 广播，模型列表与开关状态不再自相矛盾；
+- `scripts/check-all.mjs` 同步断言三键都在白名单里；内核 `patch` 升为 **ux-v15**。
+
+### 修复：漏导入导致的 ReferenceError
+
+- 实机路由日志 `~/.dsh/.pool-route.log` 出现
+  `route-fail reason=transport error="isIamTokenError is not defined"`：
+  `lib/providers/codearts/index.js` 的 `poolKindOf` 用了 `isIamTokenError`，但
+  engine.js 重导出的 53 个可读名里这一个没进导入表 —— 只在有非 2xx / 流内错误帧时
+  才炸，正常流量与 `node --check` 都发现不了；
+- 后果：ReferenceError 被 forwardChat 兜成 `kind: "transport"`（60 秒冷却），本来该
+  记 10 分钟的 `iam_stale` 被降级成 60 秒普通冷却，真实分类彻底丢失；
+- 修复：导入表补回 `isIamTokenError`；新增 `scripts/check-imports.mjs` 防线：把
+  `engine.js` 重导出的 53 个可读名当白名单，扫 `lib/` 下每个文件的**代码区**（注释
+  与字符串先剥掉）里有没有裸引用却既没 `import` 也没本地声明；`--selftest` 在内存里
+  把这次事故复现一遍，扫描器必须抓回来且干净树零误报。接进 `npm run check`，
+  同类漏导入从「上线踩雷」变成「提交即红」。
+
 ## ux-v14（2026-11-14）
 
 ### 当日额度优先烧
@@ -48,15 +75,16 @@
 
 ### 工程化
 
-- `npm run check` = `check-all.mjs`（25 个文件语法检查 + 33 条契约断言）
+- `npm run check` = `check-all.mjs`（25 个文件语法检查 + 35 条契约断言）
+  + `check-imports.mjs`（53 个引擎导出名的漏导入扫描）
   + `check-pool-core.mjs`（12 项池内核运行时断言）；
 - `scripts/check-pool-core.mjs` 是真 import 真跑：当日桶排队、latch 让位、
   `expiring=0` 不误判、状态文档字段透出——这些改一个 `??` 成 `||` 照样过静态
   检查，只能靠运行时断言兜住。全程假路由注入，不碰网络与真实凭据；
 - `scripts/verify-uxv11-e2e.mjs` / `verify-uxv12-escape.mjs` / `verify-gemini-429.mjs`
   三处 `ROOT` 补默认值，不再需要手传入参即可跑；
-- `npm run verify:live`（`scripts/verify-uxv14-live.mjs`）：对着跑着的宿主验
-  `patch` 是否已是 `ux-v14`、每条有当日桶的路由是否把 `expiring`/`expiringAt`
+- `npm run verify:live`（`scripts/verify-uxv14-live.mjs`，端口自动发现）：对着跑着的
+  宿主验 `patch` 是否已是 `ux-v15`、每条有当日桶的路由是否把 `expiring`/`expiringAt`
   报全——静态断言全绿只证明磁盘改了，证明不了进程加载了新模块；
 - README 的路由数 / 模型数 / 套餐数 / 配置键表 / 端点表与代码对齐，图床缺失的头图移除。
 
