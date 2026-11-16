@@ -25,6 +25,8 @@ import { fileURLToPath } from "node:url";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const QUIET = process.argv.includes("--quiet");
 const log = (...a) => { if (!QUIET) console.log(...a); };
+// quiet 模式也要留痕：钩子把输出重定向到 ~/.dsh/gh-sync.log
+const note = (...a) => console.log(new Date().toISOString().replace("T", " ").slice(0, 19) + "  " + a.join(" "));
 
 const git = (args, opts = {}) => execFileSync("git", args, { cwd: ROOT, maxBuffer: 1 << 28, ...opts }).toString();
 
@@ -160,7 +162,7 @@ async function main() {
   const headSha = git(["rev-parse", "HEAD"]).trim();
 
   if (tryGitPush()) {
-    log("同步完成（git push）：" + headSha.slice(0, 8));
+    note("同步完成（git push）：" + headSha.slice(0, 8));
     try { git(["update-ref", "refs/remotes/origin/main", headSha]); } catch {}
     return;
   }
@@ -168,7 +170,7 @@ async function main() {
 
   const ref = await api("/repos/" + full + "/git/ref/heads/main", {}, token);
   const remoteSha = ref.object.sha;
-  if (remoteSha === headSha) { log("远端已是最新：" + headSha.slice(0, 8)); return; }
+  if (remoteSha === headSha) { note("远端已是最新：" + headSha.slice(0, 8)); return; }
 
   let known = false;
   try { git(["cat-file", "-e", remoteSha + "^{commit}"]); known = true; } catch { known = false; }
@@ -206,12 +208,12 @@ async function main() {
   }
 
   await api("/repos/" + full + "/git/refs/heads/main", { method: "PATCH", body: JSON.stringify({ sha: parentRemote, force: !known }) }, token);
-  log("main -> " + parentRemote.slice(0, 8) + "（" + commits.length + " 个提交）");
+  note("main -> " + parentRemote.slice(0, 8) + "（" + commits.length + " 个提交）");
 
   const aligned = remoteShas.every(([l, r]) => l === r);
   if (aligned) {
     try { git(["update-ref", "refs/remotes/origin/main", parentRemote]); } catch {}
-    log("本地/远端 SHA 一致，下次可增量同步");
+    note("本地/远端 SHA 一致，下次可增量同步");
   } else {
     log("提示：本地与远端 SHA 有差异（提交消息字节不同），下次将回退为全量重建");
   }
