@@ -3,6 +3,28 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 客户端 UI 升级（覆盖 dsh-camel-pool-v1.0.2-ui-upgraded.zip，2026-11-16）
+
+### 变更
+
+- `lib/client.js`：UI 文案与布局升级，纯客户端改动，`+446 / -328` 行，集中在第 5 个
+  独立 IIFE `poolCreditsClient`（`CONTRIBUTIONS` 契约不变，classic script 无顶层
+  `import`/`export`）。
+- 面板标题 `驼峰积分池 · 剩余额度` → `驼峰积分池`；页脚 `内核标记 {patch}` → `内核 {patch}`；
+  `刷新额度` → `刷新`；`{count} 个模型` → `{count} 模型`。
+- 新增缩写文案：`caShort`（CodeArts）、`expiryMore`（`+{count} 项`）、
+  `autoCheckinShort`、`costFirstShort`、`voucherFirstShort`、`poolEnabledShort`、
+  `showRoutesShort`；新增 `EXPIRY_PREVIEW_COUNT = 2` 控制到期项预览条数。
+- 新增 0 余额过滤开关：`hideZero` / `showZero`（`仅看可用 ({count})` / `全部套餐 ({count})`）。
+- `polish-preview.png` 同步替换为发行版内新图（该文件被 `.gitignore:12` 忽略，不入库）。
+
+### 影响面
+
+- 仅 UI：`POOL_STATUS_PATH` 仍是 `/plugins/dsh-pool/status`，内核 `patch` 仍为 `ux-v21`，
+  路由、额度、账本、渠道注册逻辑一行未动；其余 97 个文件与 `dsh-camel-pool-v1.0.2-improved.zip`
+  逐字节一致。
+- 自检：`npm run check` 全绿（`check-all: 全部通过` / `check-imports` 53 个导出名全先导入后使用）。
+
 ## 维护：记忆插件换成 hy4flash + 思考强度 medium（2026-11-16）
 
 ### 现象
