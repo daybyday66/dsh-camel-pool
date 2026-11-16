@@ -323,15 +323,15 @@ if (invokedDirectly) {
 
   if (process.argv.includes("--selftest")) {
     // 跨模块闸的自测：把 ux-v16 那次真实事故（池内核用 str 却没定义）在内存里复原。
-    const poolFile = path.join(root, "lib/providers/pool/index.js");
+    const poolFile = path.join(root, "lib/providers/pool/classifier.js");
     const poolSrc = fs.readFileSync(poolFile, "utf8");
-    const poolBroken = poolSrc.replace(/function str\(value\) \{\n  return typeof value === "string" \? value : "";\n\}\n\n/, "");
+    const poolBroken = poolSrc.replace(/(?:export )?function str\(value\) \{\n  return typeof value === "string" \? value : "";\n\}\n\n/, "");
     if (poolBroken === poolSrc) {
       console.error("[selftest] 构造不出跨模块破例（池内核的 str 定义不在预期位置）—— 自测失效");
       process.exit(1);
     }
     const leaks = findLeakedHelpers(root, { [poolFile]: poolBroken });
-    if (!leaks.some((h) => h.name === "str" && h.file.endsWith("providers/pool/index.js"))) {
+    if (!leaks.some((h) => h.name === "str" && h.file.endsWith("providers/pool/classifier.js"))) {
       console.error("[selftest] 跨模块闸漏报了内存构造的 str 事故");
       process.exit(1);
     }

@@ -1,10 +1,9 @@
 
-import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { repoRoot } from './_paths.mjs';
 // 以前把仓库根硬编码成这台机器的绝对路径（换目录/换机就崩），改成从本文件位置推导。
 const ROOT = repoRoot(process.argv[2]);
-// 跨平台：用 path.join 拼路径，别手写反斜杠（Windows 专用分隔符在 POSIX 上会被当成文件名字符）。
 const u = (p) => pathToFileURL(join(ROOT, p)).href;
 const shared = await import(u('lib/shared/pool.js'));
 const gem = await import(u('lib/providers/gemini/index.js'));

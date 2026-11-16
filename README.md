@@ -23,7 +23,7 @@
 
 | 端点 | 用途 |
 |---|---|
-| `GET /plugins/dsh-pool/status` | 积分池状态：`credits.total`、`pool.routes[10]`、`models[29]`、`pool.order`、`pool.broken`、内核标记 `patch`（当前 `ux-v21`） |
+| `GET /plugins/dsh-pool/status` | 积分池状态：`credits.total`、`pool.routes[10]`、`models[29]`、`pool.order`、`pool.broken` |
 | `GET /plugins/dsh-connect/status` | 渠道聚合状态（4 渠道 signed-in / credits / checkin.state） |
 | `POST /plugins/dsh-connect/checkin` | 一键签到（全部渠道） |
 | `POST /plugins/dsh-connect/checkin/<id>` | 单渠道签到 |

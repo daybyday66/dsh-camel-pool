@@ -17,6 +17,7 @@ import {
   clearBreakers,
   poolStatusDocument,
 } from "../lib/shared/pool.js";
+import { HIDE_ALL_SENTINEL } from "../lib/shared/hidden.js";
 
 let failed = 0;
 function ok(label, cond, extra) {
@@ -135,6 +136,14 @@ const geminiPolicy = poolRouteCredits("gemini-policy");
 ok("Gemini 无积分包时按 RPD 重置窗口估算", geminiPolicy?.expiryEstimated === true && Number.isFinite(geminiPolicy?.expiryMs), geminiPolicy);
 releaseTraePolicy();
 releaseGeminiPolicy();
+
+// ⑩ 渠道级禁用哨兵（HIDE_ALL_SENTINEL）在池内核生效
+const hiddenRoute = fakeRoute("disabled-wb", 0, { status: "signed-in", credits: { remaining: 9999, total: 9999 } });
+hiddenRoute.hidden = () => [HIDE_ALL_SENTINEL];
+const releaseHidden = registerPoolRoute(hiddenRoute);
+const activeRoutes = orderedRoutesFor(MODEL, {}).map((item) => item.routeKey);
+ok("HIDE_ALL_SENTINEL 禁用整条池路由", !activeRoutes.includes("disabled-wb"), activeRoutes);
+releaseHidden();
 
 releaseCodearts();
 releaseTrae();
