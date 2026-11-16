@@ -49,6 +49,8 @@ mustContain(path.join(ROOT, "lib/panel.js"), '"dsh-camel-pool"', "settings 命�
 mustContain(path.join(ROOT, "lib/shared/pool.js"), 'export function registerPoolRoute', "池路由注册契约");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), 'export function orderedRoutesFor', "排序内核契约");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), 'export async function refreshPoolCredits', "积分刷新契约");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "export function sampleUsageCredits", "用量积分采样契约");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "sampleUsageCredits(entry.routeKey)", "成功分支接线积分采样");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'BOOT_PLACEHOLDER', "池启动占位模型锚点");
 mustContain(path.join(ROOT, "lib/panel.js"), 'autoCheckin', "白名单键 autoCheckin");
 mustContain(path.join(ROOT, "lib/panel.js"), 'poolVoucherFirst', "白名单键 poolVoucherFirst");
@@ -75,12 +77,18 @@ mustContain(path.join(ROOT, "lib/providers/gemini/index.js"), "externalHidden(GE
 mustContain(path.join(ROOT, "lib/index.js"), '["gemini", gemini]', "gemini 进 HOOKED_PROVIDERS");
 
 // ── 4. ux-v14 断言（当日额度优先 / 结构化错误分类 / 版本可查）─────────
+mustContain(path.join(ROOT, "lib/shared/credit-expiry-policy.js"), "export function policyCreditExpiry", "官网积分政策模块在位");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "policyCreditExpiry", "官网积分政策回退已接入池内核");
+mustContain(path.join(ROOT, "lib/panel.js"), "policyCreditExpiryFields", "渠道卡片标注政策估算");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "expiringAtMs", "池内核识别当日过期时刻");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch 让位开关");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v15"', "内核版本标记已升 ux-v15");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v18"', "内核版本标记已升 ux-v18");
+// 跨模块裸调用防线：structuredFailureKind 用的 str 曾在别处才有定义，运行时才炸。
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "function str(value) {", "池内核自带 str 助手（不再借用 codearts 的）");
+mustContain(path.join(ROOT, "scripts/check-imports.mjs"), "findLeakedHelpers", "跨模块裸调用静态闸在位");
 // 设置写入白名单必须覆盖 schema 里所有可切换键 —— 漏一个的后果是面板开关点了 400
 // no-whitelisted-field，而客户端把 400 当"失败保留原值"，用户看到开关弹回去、
 // 却没有任何错误提示。这类漏键只能靠静态比对。
@@ -104,9 +112,9 @@ if (!fs.existsSync(changelogPath)) {
   console.error("CONTRACT FAIL: 缺少 CHANGELOG.md —— 内核版本无处可查");
 } else {
   const log = fs.readFileSync(changelogPath, "utf8");
-  if (!log.includes("ux-v15")) {
+  if (!log.includes("ux-v18")) {
     failed++;
-    console.error("CONTRACT FAIL: CHANGELOG.md 未记录 ux-v15");
+    console.error("CONTRACT FAIL: CHANGELOG.md 未记录 ux-v18");
   } else {
     console.log("[contract] ok: CHANGELOG 覆盖当前内核版本 (CHANGELOG.md)");
   }

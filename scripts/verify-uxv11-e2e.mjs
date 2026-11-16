@@ -8,8 +8,10 @@ import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { repoRoot, skip, installHostDeps } from "./_paths.mjs";
 
-const ROOT = process.argv[2] || process.cwd();
+// 仓库根从本文件位置推导：以前用 process.cwd()，在别的目录执行时静默指向错目录。
+const ROOT = repoRoot(process.argv[2]);
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-uxv11-"));
 fs.writeFileSync(path.join(tmp, "gemini-ca-project.json"), JSON.stringify({ projectId: "test-project-uxv11" }));
 process.env.DSH_HOME = tmp;
@@ -63,9 +65,21 @@ const upstream = http.createServer((req, res) => {
 await new Promise((r) => upstream.listen(0, "127.0.0.1", r));
 process.env.CODE_ASSIST_ENDPOINT = "http://127.0.0.1:" + upstream.address().port;
 
+// pi-ai / dsh-llm 由 DSH 宿主在运行时提供，本机 node_modules 里是软链、宿主改 asar 后会断。
+// installHostDeps() 只在本进程内给这些裸包加一条兜底解析；真找不到才 SKIP（环境缺口 ≠ 代码崩）。
+installHostDeps();
+
 const S = await import(pathToFileURL(path.join(ROOT, "lib", "shared", "pool.js")).href);
 const CA = await import(pathToFileURL(path.join(ROOT, "lib", "providers", "gemini", "codeassist.js")).href);
-const PL = await import(pathToFileURL(path.join(ROOT, "lib", "providers", "pool", "index.js")).href);
+let PL;
+try {
+  PL = await import(pathToFileURL(path.join(ROOT, "lib", "providers", "pool", "index.js")).href);
+} catch (e) {
+  if (e && e.code === "ERR_MODULE_NOT_FOUND") {
+    skip("verify-uxv11-e2e", "宿主依赖缺失：" + String(e.message).split("\n")[0] + "（见 docs/SELFCHECK.md 的宿主依赖说明）");
+  }
+  throw e;
+}
 
 const EFFORT = { off: null, minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "high", max: "high" };
 const MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"].map((id) => ({
@@ -130,7 +144,8 @@ let r2 = await post(false);
 let ev2 = logLines().slice(base);
 assert.ok(r2.status >= 400, "S2 应失败，实际 " + r2.status);
 assert.ok(r2.ms < 60000, "S2 必须在预算内返回，实际 " + r2.ms + "ms");
-assert.ok(ev2.some((e) => e.ev === "route-fail" || e.ev === "pool-exhausted"), "S2 日志应记录失败");
+assert.ok(ev2.some((e) => e.ev === "route-fail" || e.ev === "pool-exhausted"),
+    "S2 日志应记录失败：status=" + r2.status + " body=" + r2.body.slice(0, 300) + " evs=" + JSON.stringify(ev2.map((e) => e.ev)));
 ok("S2 持续 429 有界失败", "status=" + r2.status + " / " + r2.ms + "ms / hits=" + hits);
 
 // S3：单路由慢首字节 7s（旧 6s probe-timeout 会静默切空 → 502）

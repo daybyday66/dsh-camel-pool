@@ -5,13 +5,19 @@ import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { repoRoot } from './_paths.mjs';
 
-const ROOT = process.argv[2] || process.cwd();
+// 仓库根从本文件位置推导：以前用 process.cwd()，在别的目录执行时静默指向错目录。
+const ROOT = repoRoot(process.argv[2]);
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-gemini-verify-'));
 fs.writeFileSync(path.join(tmp, 'gemini-ca-project.json'), JSON.stringify({ projectId: 'test-project-429' }));
 process.env.DSH_HOME = tmp;
 process.env.GEMINI_NO_PROXY = '1';
 process.env.CODE_ASSIST_API_VERSION = 'v1internal';
+// 离线语义：关掉 apikey 逃生通道（否则会真连 generativelanguage.googleapis.com 等 12s 超时），
+// 并把 project 级 429 的长阶梯（2/4/8/16/24/32s）整体压短 —— 只改等待时长，不改分支逻辑。
+process.env.GEMINI_NO_APIKEY_ESCAPE = '1';
+process.env.GEMINI_CA_QUOTA_LADDER = '50,100,200';
 
 const QUOTA = JSON.stringify({ error: { code: 429, message: 'Resource has been exhausted (e.g. check quota).', status: 'RESOURCE_EXHAUSTED' } });
 const OK = JSON.stringify({ response: { candidates: [{ content: { parts: [{ text: 'OK' }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 1, totalTokenCount: 6 } } });
@@ -60,15 +66,19 @@ assert.equal(calls[0].model, calls[2].model, 'A1 重试同一模型');
 assert.equal(calls[0].project, 'test-project-429', 'A1 projectId 从 DSH_HOME 缓存解析');
 ok('A1 偶发429自愈', calls.length + ' 次调用 / ' + (Date.now() - t0) + 'ms / 最终 200 content=OK');
 
-// ── A2: 持续 429 → 重试耗尽后换候选模型，最终把 429 回给池 ──
+// ── A2: 持续 429 → 原地长退避把阶梯走完，然后把 429 原样回给池（ux-v11 契约）──
+// 项目级 RESOURCE_EXHAUSTED 是 project 级时间窗，换候选模型共享同一配额，换过去只会白烧预算；
+// 所以这里断言的是「不换候选 + 重试有界」，不是旧的「应尝试多个候选模型」。
 calls = []; mode = 'always429';
 const t1 = Date.now();
 const r2 = await mod.codeAssistFetch('http://unused', req());
-assert.equal(r2.status, 429, 'A2 最终应回 429');
+assert.equal(r2.status, 429, 'A2 最终应把 429 原样回池');
 const models = [...new Set(calls.map((c) => c.model))];
-assert.ok(calls.length > 3, 'A2 应超过单模型重试次数（已换候选）');
-assert.ok(models.length >= 2, 'A2 应尝试多个候选模型: ' + models.join(','));
-ok('A2 持续429换候选', calls.length + ' 次调用 / ' + models.length + ' 个候选 [' + models.join(', ') + '] / ' + (Date.now() - t1) + 'ms');
+assert.equal(models.length, 1, 'A2 项目级 429 不应换候选模型: ' + models.join(','));
+assert.equal(calls.length, 4, 'A2 应走完 3 格阶梯后收手（1 次首发 + 3 次退避重试）');
+const j2 = await r2.json();
+assert.equal(j2?.error?.status, 'RESOURCE_EXHAUSTED', 'A2 响应体应保留上游 429 语义');
+ok('A2 持续429有界收手', calls.length + ' 次调用 / 1 个候选 [' + models.join(', ') + '] / ' + (Date.now() - t1) + 'ms / 429 回池');
 
 // ── A3: 403 auth 确定性错误 → 不重试、立刻回给池 ──
 calls = []; mode = 'auth403';

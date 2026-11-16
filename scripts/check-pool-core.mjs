@@ -114,6 +114,28 @@ const row = (doc.pool?.routes ?? []).find((item) => item.key === "codearts");
 ok("status 行带 expiring", row?.expiring === 70.03, row?.expiring);
 ok("status 行带 expiringAt ISO", row?.expiringAt === EXPIRE_AT, row?.expiringAt);
 
+// ⑨ 官方政策兜底：无上游逐包到期的 Trae / Gemini 也必须有有限 expiryMs。
+function policyRoute(key, kind, creditsDoc) {
+  const route = fakeRoute(key, 9, creditsDoc);
+  route.kind = kind;
+  return route;
+}
+const releaseTraePolicy = registerPoolRoute(policyRoute("trae-policy", "trae", {
+  status: "signed-in",
+  credits: { remaining: 10, total: 10 },
+}));
+const geminiPolicyRoute = policyRoute("gemini-policy", "gemini", { status: "ok" });
+delete geminiPolicyRoute.credits;
+geminiPolicyRoute.status = async () => ({ status: "ok" });
+const releaseGeminiPolicy = registerPoolRoute(geminiPolicyRoute);
+await refreshPoolCredits({ force: true, only: ["trae-policy", "gemini-policy"] });
+const traePolicy = poolRouteCredits("trae-policy");
+ok("Trae 无逐包到期时按官网政策估算", traePolicy?.expiryEstimated === true && Number.isFinite(traePolicy?.expiryMs), traePolicy);
+const geminiPolicy = poolRouteCredits("gemini-policy");
+ok("Gemini 无积分包时按 RPD 重置窗口估算", geminiPolicy?.expiryEstimated === true && Number.isFinite(geminiPolicy?.expiryMs), geminiPolicy);
+releaseTraePolicy();
+releaseGeminiPolicy();
+
 releaseCodearts();
 releaseTrae();
 releaseQoder();

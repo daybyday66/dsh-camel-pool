@@ -1,6 +1,8 @@
 
 import { pathToFileURL } from 'node:url';
-const ROOT = "C:\\Users\\00\\Documents\\the coding assistant\\驼峰插件\\dsh-camel-pool";
+import { repoRoot } from './_paths.mjs';
+// 以前把仓库根硬编码成这台机器的绝对路径（换目录/换机就崩），改成从本文件位置推导。
+const ROOT = repoRoot(process.argv[2]);
 const u = (p) => pathToFileURL(ROOT + '\\' + p).href;
 const shared = await import(u('lib/shared/pool.js'));
 const gem = await import(u('lib/providers/gemini/index.js'));

@@ -75,9 +75,46 @@ export function stripNonCode(src) {
       }
       continue;
     }
+    // 正则字面量：不认出来就会把里面的引号当成字符串开头，一路吃到下几行代码
+    // （ux-v16 实测：streamQuotaError 的 /"error"|"code"|…/ 把后面 20 行全吞了，
+    // 于是 toPoolModel 这种本文件明明有的函数反被判成「别的文件才有」）。
+    if (c === "/" && regexCanStart(out)) {
+      push(" "); i++;
+      let inClass = false;
+      while (i < n) {
+        const ch = src[i];
+        if (ch === "\\") { push("  "); i += 2; continue; }
+        if (ch === "[") inClass = true;
+        else if (ch === "]") inClass = false;
+        else if (ch === "/" && !inClass) { push(" "); i++; break; }
+        else if (ch === "\n") { break; } // 正则不跨行，宁可提前收尾也别吞代码
+        // 正则体整个抹白：/^workbuddy(\d+)$/ 里的 workbuddy( 长得就像一次调用，
+        // 留着会让跨模块闸把「正则里的渠道名」报成漏定义（第一版报了 7 处这种）。
+        push(" "); i++;
+      }
+      while (i < n && /[a-z]/i.test(src[i])) { push(" "); i++; } // 标志位 iu/gm…
+      continue;
+    }
     push(c); i++;
   }
   return out;
+}
+
+/** 这里能开始一个正则字面量吗（否则 / 就是除号）。 */
+const REGEX_PREFIX_WORDS = new Set(["return", "typeof", "case", "in", "of", "delete", "void", "throw", "else", "do", "yield", "await", "instanceof", "new"]);
+function regexCanStart(out) {
+  let k = out.length - 1;
+  while (k >= 0 && (out[k] === " " || out[k] === "\t" || out[k] === "\n")) k--;
+  if (k < 0) return true;
+  const ch = out[k];
+  if ("(,=:[!&|?{};+-*%<>~^".includes(ch)) return true;
+  if (/[\w$]/.test(ch)) {
+    // return /xxx/.test(s) —— 前缀是关键字时也是正则，不是除法。
+    let s = k;
+    while (s >= 0 && /[\w$]/.test(out[s])) s--;
+    return REGEX_PREFIX_WORDS.has(out.slice(s + 1, k + 1));
+  }
+  return false;
 }
 
 /** engine.js 里 `x: readableName` 形式的重导出名。 */
@@ -96,6 +133,38 @@ function walkJs(dir) {
       if (ent.name === "vendor") continue; // vendor 是上游构建产物，逐字节不动
       out.push(...walkJs(p));
     } else if (ent.name.endsWith(".js")) out.push(p);
+  }
+  return out;
+}
+
+/** 形参名：function f(a, b) / 方法简写 f(a, b) { / 箭头 (a, b) => 与 x =>。 */
+export function paramNames(code) {
+  const out = new Set();
+  const KEYWORDS = new Set(["if", "for", "while", "switch", "catch", "with", "return", "function", "typeof", "await", "new", "delete", "void"]);
+  const addList = (inner) => {
+    let depth = 0;
+    let cur = "";
+    const parts = [];
+    for (const ch of inner) {
+      if (ch === "(" || ch === "[" || ch === "{") depth++;
+      else if (ch === ")" || ch === "]" || ch === "}") depth--;
+      if (ch === "," && depth === 0) { parts.push(cur); cur = ""; continue; }
+      cur += ch;
+    }
+    parts.push(cur);
+    for (const part of parts) {
+      const head = part.split("=")[0].split(":")[0].replace("\.\.\.", "").trim();
+      if (/^[A-Za-z_$][\w$]*$/.test(head) && !KEYWORDS.has(head)) out.add(head);
+    }
+  };
+  for (const m of code.matchAll(/\bfunction\s*\*?\s*[A-Za-z_$]?[\w$]*\s*\(([^()]*)\)/g)) addList(m[1]);
+  for (const m of code.matchAll(/\(([^()]*)\)\s*=>/g)) addList(m[1]);
+  for (const m of code.matchAll(/([A-Za-z_$][\w$]*)\s*\(([^()]*)\)\s*\{/g)) {
+    if (KEYWORDS.has(m[1])) continue;
+    addList(m[2]);
+  }
+  for (const m of code.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*=>/g)) {
+    if (!KEYWORDS.has(m[1])) out.add(m[1]);
   }
   return out;
 }
@@ -120,6 +189,9 @@ export function declaredNames(code) {
     }
   }
   for (const m of code.matchAll(/^\s*(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/gm)) local.add(m[1]);
+  // 形参名也算「本文件有」：resolve / res / quota / callback 这类名字大量以形参
+  // 身份被当函数调，不收集就会在跨模块闸里全成了误报（第一版一口气报了 18 处）。
+  for (const name of paramNames(code)) local.add(name);
   return { imported, local };
 }
 
@@ -177,6 +249,72 @@ export function findMissingImports(root, srcOverride) {
   return problems;
 }
 
+// ── 第二道闸：跨模块「裸调用」───────────────────────────────────────────────
+//
+// engine.js 那道闸只盯 codearts 重导出的名字。更常见的事故是另一种：
+// 某个小助手（str / rec / num / toMs）在 A 文件里定义，B 文件抄了同一段逻辑
+// 却忘了把助手一起搬过来 —— 于是 B 里的 str(x) 变成 ReferenceError。
+// ux-v16 的 structuredFailureKind 就是这么炸的：str 只存在于
+// providers/codearts/{index,credits}.js，池内核直接拿来用，任何非 2xx 的
+// JSON 错误体都会让整个请求 500 pool_internal_error（分类器自己先崩了）。
+//
+// 判定：一个名字在**别的** lib 文件里有模块级定义，在本文件既没 import 也没声明，
+// 却以裸调用形式出现 → 报出来。JS 内建全局（Object/Math/JSON/fetch…）先排除。
+
+/** 不需要声明的宿主/内建全局。只列真会以裸调用出现的。 */
+const GLOBALS = new Set(`
+  Object Array String Number Boolean Symbol BigInt Math JSON Date RegExp Error TypeError RangeError SyntaxError
+  Map Set WeakMap WeakSet Promise Proxy Reflect Intl Buffer URL URLSearchParams TextEncoder TextDecoder
+  AbortController AbortSignal EventTarget Event Response Request Headers FormData Blob File
+  setTimeout clearTimeout setInterval clearInterval setImmediate queueMicrotask structuredClone fetch
+  parseInt parseFloat isNaN isFinite encodeURIComponent decodeURIComponent encodeURI decodeURI
+  require console process globalThis atob btoa crypto performance
+`.split(/\s+/).filter(Boolean));
+
+/**
+ * 名字 → 声明它的文件集合。
+ *
+ * 不能用「第 0 列」判断模块级：池内核整个主体缩在工厂函数里
+ * （providers/pool/index.js 的 toPoolModel 就缩在 2 空格处），按第 0 列收会把它
+ * 当成「别的文件才有」，于是自己调自己反而被报成漏定义（第一版就这么误报的）。
+ * 所以直接复用 declaredNames 的 local 集合：任何深度的声明都算「本文件有」，
+ * 跨文件的同名声明才进 where 表。
+ */
+function declaredEverywhere(files, srcOverride, root) {
+  const map = new Map();
+  for (const file of files) {
+    const raw = srcOverride && srcOverride[file] !== undefined ? srcOverride[file] : fs.readFileSync(file, "utf8");
+    const relName = path.relative(root, file).replaceAll("\\", "/");
+    for (const name of declaredNames(stripNonCode(raw)).local) {
+      if (GLOBALS.has(name) || name.length < 3) continue;
+      if (!map.has(name)) map.set(name, new Set());
+      map.get(name).add(relName);
+    }
+  }
+  return map;
+}
+
+/** 返回 [{file, name, count, definedIn}]。 */
+export function findLeakedHelpers(root, srcOverride) {
+  const files = walkJs(path.join(root, "lib"));
+  const where = declaredEverywhere(files, srcOverride, root);
+  const problems = [];
+  for (const file of files) {
+    const raw = srcOverride && srcOverride[file] !== undefined ? srcOverride[file] : fs.readFileSync(file, "utf8");
+    const code = stripNonCode(raw);
+    const { imported, local } = declaredNames(code);
+    const rel = path.relative(root, file).replaceAll("\\", "/");
+    for (const [name, definedIn] of where) {
+      if (imported.has(name) || local.has(name)) continue;
+      if (definedIn.size === 1 && definedIn.has(rel)) continue;
+      const count = countBareCalls(code, name);
+      if (count === 0) continue;
+      problems.push({ file: rel, name, count, definedIn: [...definedIn].filter((f) => f !== rel) });
+    }
+  }
+  return problems;
+}
+
 const invokedDirectly = process.argv[1] !== undefined
   && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 
@@ -184,6 +322,24 @@ if (invokedDirectly) {
   const root = process.argv.slice(2).find((a) => !a.startsWith("--")) || process.cwd();
 
   if (process.argv.includes("--selftest")) {
+    // 跨模块闸的自测：把 ux-v16 那次真实事故（池内核用 str 却没定义）在内存里复原。
+    const poolFile = path.join(root, "lib/providers/pool/index.js");
+    const poolSrc = fs.readFileSync(poolFile, "utf8");
+    const poolBroken = poolSrc.replace(/function str\(value\) \{\n  return typeof value === "string" \? value : "";\n\}\n\n/, "");
+    if (poolBroken === poolSrc) {
+      console.error("[selftest] 构造不出跨模块破例（池内核的 str 定义不在预期位置）—— 自测失效");
+      process.exit(1);
+    }
+    const leaks = findLeakedHelpers(root, { [poolFile]: poolBroken });
+    if (!leaks.some((h) => h.name === "str" && h.file.endsWith("providers/pool/index.js"))) {
+      console.error("[selftest] 跨模块闸漏报了内存构造的 str 事故");
+      process.exit(1);
+    }
+    if (findLeakedHelpers(root).length > 0) {
+      console.error("[selftest] 跨模块闸在干净树上误报：" + JSON.stringify(findLeakedHelpers(root)));
+      process.exit(1);
+    }
+
     // 自测：把已修好的那次真实事故在内存里复现，扫描器必须重新抓到。
     const victim = path.join(root, "lib/providers/codearts/index.js");
     const original = fs.readFileSync(victim, "utf8");
@@ -206,6 +362,15 @@ if (invokedDirectly) {
     process.exit(0);
   }
 
+  const leaks = findLeakedHelpers(root);
+  if (leaks.length > 0) {
+    for (const p of leaks) {
+      console.error("HELPER FAIL: " + p.file + " 调用了 " + p.name + "（" + p.count + " 次），但本文件没有定义/导入 —— 定义在 " + p.definedIn.join("、") + "，运行时 ReferenceError");
+    }
+    console.error("\ncheck-imports: " + leaks.length + " 处跨模块裸调用");
+    process.exit(1);
+  }
+
   const problems = findMissingImports(root);
   if (problems.length > 0) {
     for (const p of problems) {
@@ -216,4 +381,5 @@ if (invokedDirectly) {
   }
   const total = engineExportNames(root).size;
   console.log("[imports] engine.js 的 " + total + " 个导出名，全部先导入后使用");
+  console.log("[imports] 跨模块裸调用 0 处（模块级助手名全部有定义或导入）");
 }

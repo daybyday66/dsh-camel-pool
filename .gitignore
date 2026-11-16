@@ -8,3 +8,5 @@ _pool*.json
 scripts/reverse-verify-bugfix.mjs
 scripts/sync-to-profile.mjs
 .DS_Store
+.polish-preview/
+polish-preview.png

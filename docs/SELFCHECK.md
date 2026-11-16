@@ -19,14 +19,20 @@
 | P3-8 | normalizeEntry 放行写法脆 | fixed | `CHANNEL_KINDS` 带 `idPattern`，校验收敛到 `channelIdMatches`。见 ux-v14 |
 | P3-9 | 在线端点 404（部署态） | fixed | 重启宿主后 5 个端点全部 200 |
 | P3-10 | codearts 调用 `isIamTokenError()` 但没 import | fixed | 补导入；新增 `scripts/check-imports.mjs` 把同类漏导入变成提交即红 |
+| P3-11 | 池内核 `structuredFailureKind` 用 `str()` 但本文件没定义 | fixed | 补本地 `str`；`check-imports` 增跨模块裸调用闸（`findLeakedHelpers`）。见 ux-v16 |
+| P3-12 | 历史 verify 脚本 `ROOT = argv[2] \|\| cwd`，换个目录执行即崩 | fixed | `scripts/_paths.mjs` 从 `import.meta.url` 推导；宿主依赖兜底 + 活体门控。见 ux-v16 |
 
 `fixed` 项的复跑命令是 `npm run check`，它现在是三级，对应三类「静态看不出、只有某一层能看见」的错误：
 
 - `scripts/check-all.mjs` —— 25 个文件 `node --check` + 36 条契约断言，
   含针对上表的负向断言（例如「codearts 不再把窗口写成 0」「面板不再内联单例判断」）；
-- `scripts/check-imports.mjs` —— 把 `engine.js` 重导出的 53 个可读名当白名单，扫 `lib/`
-  每个文件的代码区（注释与字符串先剥掉）有没有裸引用却既没 import 也没本地声明。
-  抓的是「语法对、跑正常路径也对，只有走到某个分支才 ReferenceError」这一类（P3-10）；
+- `scripts/check-imports.mjs` —— 两道闸，抓的都是「语法对、跑正常路径也对，只有走到某个
+  分支才 ReferenceError」这一类：
+  ① 把 `engine.js` 重导出的 53 个可读名当白名单，扫 `lib/` 每个文件的代码区（注释、字符串、
+  正则先剥掉）有没有裸引用却既没 import 也没本地声明（P3-10）；
+  ② 跨模块裸调用：某名字在别的 `lib/` 文件里有声明，本文件没 import 也没声明却直接调
+  ——「抄了逻辑没抄助手」（P3-11）。`--selftest` 把这两起真实事故在内存里复原，必须抓回来
+  且干净树零误报；
 - `scripts/check-pool-core.mjs` —— 真 import 真跑的 12 项池内核断言
   （当日桶排队、latch 让位、`expiring=0` 不误判、状态字段透出、`only` 只刷指定路由）。
   静态断言抓不住 `??` 写成 `||` 这类改动，所以运行时那一层不能省。

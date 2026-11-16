@@ -4,8 +4,10 @@ import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { repoRoot, skip, installHostDeps } from "./_paths.mjs";
 
-const ROOT = process.argv[2];
+// 仓库根从本文件位置推导：以前默认 undefined，不带参数直接跑就崩在 path.join(undefined)。
+const ROOT = repoRoot(process.argv[2]);
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-gemini-e2e-"));
 fs.writeFileSync(path.join(tmp, "gemini-ca-project.json"), JSON.stringify({ projectId: "test-project-429" }));
 process.env.DSH_HOME = tmp;
@@ -41,9 +43,20 @@ const upstream = http.createServer((req, res) => {
 await new Promise((r) => upstream.listen(0, "127.0.0.1", r));
 process.env.CODE_ASSIST_ENDPOINT = "http://127.0.0.1:" + upstream.address().port;
 
+// 池代理要用宿主提供的 pi-ai / dsh-llm：本进程内兜底解析，找不到才 SKIP。
+installHostDeps();
+
 const S = await import(pathToFileURL(path.join(ROOT, "lib", "shared", "pool.js")).href);
 const CA = await import(pathToFileURL(path.join(ROOT, "lib", "providers", "gemini", "codeassist.js")).href);
-const P = await import(pathToFileURL(path.join(ROOT, "lib", "providers", "pool", "index.js")).href);
+let P;
+try {
+  P = await import(pathToFileURL(path.join(ROOT, "lib", "providers", "pool", "index.js")).href);
+} catch (e) {
+  if (e && e.code === "ERR_MODULE_NOT_FOUND") {
+    skip("verify-gemini-429-e2e", "宿主依赖缺失：" + String(e.message).split("\n")[0] + "（见 docs/SELFCHECK.md 的宿主依赖说明）");
+  }
+  throw e;
+}
 
 // 与 geminiRoute() 的 oauth 分支等价：fetch 直接绑真实 codeAssistFetch
 const EFFORT = { off: null, minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "high", max: "high" };
@@ -129,7 +142,7 @@ reset("always429");
 base = logLines().length;
 let r4a = await post(PID);
 let ev4a = logLines().slice(base);
-assert.equal(r4a.status, 502, "S4a 全池失败应 502，实际 " + r4a.status);
+assert.equal(r4a.status, 502, "S4a 全池失败应 502，实际 " + r4a.status + " " + r4a.body.slice(0, 300));
 assert.ok(ev4a.some((e) => e.ev === "route-fail" && e.kind === "quota"), "S4a 日志应有 quota route-fail");
 assert.equal(S.breakerReport()[0]?.kind, "quota", "S4a 应标 gemini/quota 冷却");
 mode = "ok"; hits = 0;

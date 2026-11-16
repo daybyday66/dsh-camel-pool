@@ -8,8 +8,21 @@
 // 与 check-pool-core.mjs 的分工：那个用假路由证明内核逻辑对，这个证明
 // 「宿主真的加载了新代码」——静态断言全绿也可能只是磁盘改了、进程还跑着旧模块。
 import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import { repoRoot } from "./_paths.mjs";
 
 const PATH = "/plugins/dsh-pool/status";
+// 期望的 patch 从源码里读，不写死：写死的话每次升 patch 都要回来改一行，
+// 忘了改就是「脚本红了但其实一切正常」——和它要防的「磁盘改了进程还是旧的」一样糟。
+const ROOT = repoRoot(process.argv[3]);
+function expectedPatch() {
+  try {
+    const src = fs.readFileSync(path.join(ROOT, "lib", "providers", "pool", "index.js"), "utf8");
+    return (src.match(/patch:\s*"(ux-v\d+)"/) || [])[1] || "";
+  } catch { return ""; }
+}
+const EXPECTED_PATCH = expectedPatch();
 const KNOWN_PORTS = [13836, 10679, 13347, 6854, 10233, 9229];
 const EXPLICIT = Number(process.argv[2]) || Number(process.env.PORT) || 0;
 
@@ -64,7 +77,12 @@ try {
   process.exit(2);
 }
 
-ok("内核标记已是 ux-v15（否则宿主仍在跑旧模块，重启后再验）", doc.patch === "ux-v15", doc.patch);
+ok(
+  "内核标记与源码一致（源码 " + (EXPECTED_PATCH || "?") + "，宿主 " + (doc.patch || "?") + "）" +
+    (doc.patch === EXPECTED_PATCH ? "" : " —— 宿主仍在跑旧模块，重启宿主后再验"),
+  Boolean(EXPECTED_PATCH) && doc.patch === EXPECTED_PATCH,
+  { live: doc.patch, source: EXPECTED_PATCH },
+);
 
 const routes = doc.pool?.routes ?? [];
 ok("路由表非空", routes.length > 0, routes.length);
@@ -89,4 +107,4 @@ if (failed > 0) {
   console.error("\nverify-uxv14-live: " + failed + " 项失败");
   process.exit(1);
 }
-console.log("\nverify-uxv14-live: 全部通过（内核 ux-v15 已在线）");
+console.log("\nverify-uxv14-live: 全部通过（内核 " + doc.patch + " 已在线，与源码一致）");
