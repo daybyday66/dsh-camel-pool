@@ -26,7 +26,13 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const QUIET = process.argv.includes("--quiet");
 const log = (...a) => { if (!QUIET) console.log(...a); };
 // quiet 模式也要留痕：钩子把输出重定向到 ~/.dsh/gh-sync.log
-const note = (...a) => console.log(new Date().toISOString().replace("T", " ").slice(0, 19) + "  " + a.join(" "));
+const stamp = () => {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " +
+    p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+};
+const note = (...a) => console.log(stamp() + "  " + a.join(" "));
 
 const git = (args, opts = {}) => execFileSync("git", args, { cwd: ROOT, maxBuffer: 1 << 28, ...opts }).toString();
 
