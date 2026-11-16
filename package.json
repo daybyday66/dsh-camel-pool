@@ -38,7 +38,9 @@
     "verify:e2e": "node scripts/verify-uxv11-e2e.mjs && node scripts/verify-gemini-429-e2e.mjs",
     "verify:gate": "node scripts/verify-uxv19-gate.mjs",
     "verify:net": "node scripts/verify-uxv12-escape.mjs",
-    "verify:live": "node scripts/verify-uxv14-live.mjs"
+    "verify:live": "node scripts/verify-uxv14-live.mjs",
+    "sync": "node scripts/gh-push.mjs",
+    "sync:quiet": "node scripts/gh-push.mjs --quiet"
   },
   "exports": {
     ".": {
