@@ -78,7 +78,13 @@ function tryGitPush() {
   if (process.env.SKIP_GIT_PUSH === "1") return false;
   try {
     execFileSync("git", ["-c", "http.proxy=", "-c", "https.proxy=", "push", "origin", "HEAD:main"], {
-      cwd: ROOT, stdio: ["pipe", "pipe", "pipe"], timeout: 25000, env: noProxyEnv(),
+      cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], timeout: 25000, env: {
+        ...noProxyEnv(),
+        GIT_TERMINAL_PROMPT: "0",
+        GCM_INTERACTIVE: "never",
+        GIT_ASKPASS: "echo",
+        SSH_ASKPASS: "echo",
+      },
     });
     return true;
   } catch {
