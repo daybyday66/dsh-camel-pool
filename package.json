@@ -23,12 +23,14 @@
   },
   "main": "lib/index.js",
   "scripts": {
-    "check": "node scripts/check-all.mjs && node scripts/check-imports.mjs && node scripts/check-pool-core.mjs && node scripts/check-hardening.mjs",
+    "check": "node scripts/check-all.mjs && node scripts/check-imports.mjs && node scripts/check-pool-core.mjs && node scripts/check-hardening.mjs && node scripts/check-qoder-vault.mjs",
     "check:syntax": "node scripts/check-all.mjs",
     "check:imports": "node scripts/check-imports.mjs && node scripts/check-imports.mjs --selftest",
     "check:core": "node scripts/check-pool-core.mjs",
+    "check:vault": "node scripts/check-qoder-vault.mjs",
     "verify": "node scripts/verify-uxv10.mjs && node scripts/verify-gemini-429.mjs",
     "verify:e2e": "node scripts/verify-uxv11-e2e.mjs && node scripts/verify-gemini-429-e2e.mjs",
+    "verify:gate": "node scripts/verify-uxv19-gate.mjs",
     "verify:net": "node scripts/verify-uxv12-escape.mjs",
     "verify:live": "node scripts/verify-uxv14-live.mjs"
   },

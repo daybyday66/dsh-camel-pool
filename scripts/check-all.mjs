@@ -85,7 +85,17 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v18"', "内核版本标记已升 ux-v18");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v20"', "内核版本标记已升 ux-v20");
+// ux-v19：池转发的兜底抓取必须是 directFetch，不能回落 globalThis.fetch。
+// billion-context 用 defineProperty 接管全局 fetch 并把自己重链到最外层，未声明
+// route.fetch 的路由（trae/trae2/qoder/workbuddy/bailian/qiniu）于是被它的
+// silent-direct 闸门本地 422 掉 —— 上游一次没被打到，池却报「所有路由都失败」。
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'entry.route.fetch === "function" ? entry.route.fetch : directFetch', "池转发兜底走直连（不回落全局 fetch）");
+mustNotContain(path.join(ROOT, "lib/providers/pool/index.js"), "? entry.route.fetch : fetch;", "池转发不再回落 globalThis.fetch");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "function localGateRefusal(status, text)", "本机拦截层（bili gate）单独可辨识");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'type: "pool_gate_blocked"', "全池被闸门拦时不再误报 pool_exhausted");
+// 闸门分支绝不能记熔断：进程级闸门会把十条路由一起冷却 60s，下一个请求照样全灭。
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'kind: "gate", gate', "闸门失败带 gate 分类但不进熔断");
 // 跨模块裸调用防线：structuredFailureKind 用的 str 曾在别处才有定义，运行时才炸。
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "function str(value) {", "池内核自带 str 助手（不再借用 codearts 的）");
 mustContain(path.join(ROOT, "scripts/check-imports.mjs"), "findLeakedHelpers", "跨模块裸调用静态闸在位");
@@ -112,9 +122,9 @@ if (!fs.existsSync(changelogPath)) {
   console.error("CONTRACT FAIL: 缺少 CHANGELOG.md —— 内核版本无处可查");
 } else {
   const log = fs.readFileSync(changelogPath, "utf8");
-  if (!log.includes("ux-v18")) {
+  if (!log.includes("ux-v19")) {
     failed++;
-    console.error("CONTRACT FAIL: CHANGELOG.md 未记录 ux-v18");
+    console.error("CONTRACT FAIL: CHANGELOG.md 未记录 ux-v19");
   } else {
     console.log("[contract] ok: CHANGELOG 覆盖当前内核版本 (CHANGELOG.md)");
   }

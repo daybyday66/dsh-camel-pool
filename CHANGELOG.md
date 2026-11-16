@@ -3,6 +3,70 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## ux-v20（2026-11-16）
+
+### 修复：Qoder 会话一过期，面板那条路由就红「暂不可用」，只能手工重灌
+
+- 现象：`/plugins/dsh-pool/status` 里 qoder1 一条带 `error`，面板渲染成红字「暂不可用」；
+  其余九条正常。用户的观感是「总有一条路由莫名其妙挂掉」。
+- 根因：`createSessionStore.current()` 只读 `$DSH_HOME/connect-auth/<id>-session.json`，
+  `expiresAt` 一过就 `return undefined`，上层回落 PAT —— 而 qoder1 从来没配 PAT，
+  于是整条路由掉成 signed-out。文件里的 `refreshToken` 没有任何代码消费；
+  `POST /api/v1/jobToken/refresh` 无论带什么 body 都是 400，`/api/v1/auth/refresh` 一类
+  是 401 `TOKEN_INVALID`，**上游没有可用的续期端点**。真正会续期的只有 Qoder CN 桌面
+  App 自己（它登录一次就把新会话写进 `%APPDATA%/com.qodercn.app.stable/auth.v1.dat`）。
+- 修复：新增 `lib/providers/qoder/desktop-vault.js`，把桌面 App 的会话解出来当作第三级来源。
+  加密是 `v10` 前缀 + AES-256-GCM（12B nonce + 密文 + 16B tag），密钥在 `Local State` 的
+  `os_crypt.encrypted_key`（去 5 字节 `DPAPI` 标记后由 Windows DPAPI 解封，`CurrentUser` 域）。
+  DPAPI 那一步必须走 PowerShell（`Add-Type -AssemblyName System.Security`），AES-GCM 放 Node
+  （PowerShell 5.1 没有 `AesGcm`）。
+- 接法：`current()` 的三级来源变成 本地会话文件 → 桌面 App（自动导入并落盘）→ undefined。
+  **已经有效的本地文件绝不覆盖**（否则手工配的 PAT 会话会被 App 的号顶掉）；导入带 5 分钟
+  冷却与 in-flight 去重（解一次 DPAPI 要几百毫秒，状态路由每轮都会问）；状态路由最多等 3 秒，
+  等不到就先回 undefined、导入继续在后台跑完。
+- 防抢号：`desktopClaimedBy()` 扫同目录的 `qoder*<n>-session.json`，同一个 uid 只能占一个槽位
+  （并发限制按账号算）—— 桌面 App 只登一个号，qoder2 不会被顶成同一个账号。
+- 同时修掉一个自己挖的坑：`readLocal()` 的 `expired` 分支**也带 credential**（留给诊断看
+  「过期的是哪一份」），而 `current()` 原本只判 `credential !== undefined`，于是过期会话被当成
+  本地可用、导入永远不触发 —— 面板那行红字一直好不了。现在显式先排 `expired`。
+- 顺手：`installFetchRescue()` 的重复安装改成真正的空操作（同版本 + `globalThis.fetch` 仍是我们
+  的访问器时返回 `{installed:false, reason:"already"}`），tag 只在首次安装写；`setBase` 在底没变
+  时不再重建 wrapper，保住引用相等性。
+- 回归：`scripts/check-qoder-vault.mjs` 14 项（v10 密文往返、错密钥被 GCM 拦、魔数与长度校验、
+  会话收敛、落盘字段、占用判定的五种情形、authDir 缺失不抛），已并入 `npm run check`。
+
+## ux-v19（2026-11-16）
+
+### 修复：一条多兆 prompt 让「积分池所有路由都失败」（每条路由同一个 422）
+
+- 现象：DSH 面板连出三张「处理失败 / 已重试模型请求 (2/2)」，正文是
+  `502 {"message":"积分池所有路由都失败: trae 422, trae2 422", "type":"pool_exhausted"}`，
+  每条路由的 error 都是同一个
+  `bili_gate_oversize_refusal_unattributed_bytes`："billion-context refused this request
+  locally: it is not attributed to a bili-managed session and its body is larger than the
+  silent-direct byte ceiling"。看起来像十个渠道同时挂，其实上游一次都没被打到。
+- 根因：`lib/providers/pool/index.js` 的转发兜底写的是
+  `typeof entry.route.fetch === "function" ? entry.route.fetch : fetch` —— 没声明
+  `route.fetch` 的路由（trae / trae2 / qoder / workbuddy / bailian / qiniu）全部回落
+  **全局** `fetch`。而 `billion-context` 用 `Object.defineProperty(globalThis,"fetch",…)`
+  接管了它，一检测到第三方又包一层就把自己重链到最外层（`BILI_RECLAIM_FETCH_PATCH=0`
+  才不回收），于是它的闸门永远在最前面：只要请求没被认成它自己管的会话、body 超过
+  silent-direct 上限（`MAX_SILENT_DIRECT_BODY_BYTES = 8MB`，`BILI_SILENT_DIRECT_MAX_MB`
+  可调），就在本地 422，请求一个字节都没出网。因为这是**进程级**包装，与路由无关，
+  所以池里每一条未声明 fetch 的路由都以同样方式失败，最后汇总成 pool_exhausted。
+- 修复：兜底改成 `shared/net-rescue.js` 的 `directFetch`（undici 显式 Agent → 裸
+  `node:https/http`，完全不经过 `globalThis.fetch`）。这与 codearts / gemini 适配层
+  早就采用的绕行方式一致 —— 装配顺序不再是变量。
+- 修复：新增 `localGateRefusal(status, text)` 分类。422 且正文含 `bili_gate_*` 时记
+  `kind:"gate"`，**不记熔断**（进程级闸门会把十条路由一起冷却 60s，下一个请求照样全灭），
+  并把汇总从 `pool_exhausted` 改成 `pool_gate_blocked`，文案直接指出是请求体超了
+  silent-direct 上限、以及该调哪个环境变量。
+- 回归：`scripts/verify-uxv19-gate.mjs` 把全局 fetch 换成「凡是池转发就 422」的假闸门，
+  断言池仍能 200 打通上游（全局 fetch 调用次数必须为 0），并断言声明了 route.fetch 且
+  被闸门拒的路由得到 `pool_gate_blocked` 而不是 pool_exhausted、且不产生熔断。
+- 静态防线：check-all 新增三条（兜底是 directFetch / 不再回落全局 fetch / 闸门单独分类），
+  check-hardening 新增两条，防止这次修复被下一次「顺手改回去」抹掉。
+
 ## ux-v18（2026-11-15）
 
 ### 修复：网络一抖，十个渠道余额全变 0 / 到期时间全空
