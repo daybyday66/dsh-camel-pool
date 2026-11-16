@@ -4,8 +4,9 @@
   "description": "独立的驼峰积分池插件：从渠道中心整包独立出来，自带积分池剩余额度显示面板、自动签到、按额度智能路由（402/429 自动切换），并可持续注册更多渠道以扩充模型选择。",
   "version": "1.0.2",
   "author": {
-    "name": "chengshenyangtai",
-    "url": "https://github.com/chengshenyangtai"
+    "name": "daybyday66",
+    "email": "172792287+daybyday66@users.noreply.github.com",
+    "url": "https://github.com/daybyday66"
   },
   "keywords": [
     "dsh-plugin",
