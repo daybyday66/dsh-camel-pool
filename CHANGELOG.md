@@ -3,6 +3,54 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 维护：记忆插件换成 hy4flash + 思考强度 medium（2026-11-16）
+
+### 现象
+
+- daemon 的 `HINDSIGHT_API_*_LLM_MODEL` 想改成 `hy4flash`，池却回 402
+  `pool_exhausted`「积分池里没有可用于 hy4flash 的路由」——`/v1/models` 里只有
+  `hy4flash-free` 与 `hy4std`；同时 `reasoning_effort: "medium"` 被静默改写成 `high`。
+
+### 根因
+
+- `hy4flash` 与 `hy4flash-free` 的上游 `name` 都是 `Hy4 flash`，`normName` 归一后同是
+  `hy4flash`。`mergedModelGroups` 的第三把 key（`"name:" + normName(...)`）把后来的
+  `hy4flash` 并进先建的 `hy4flash-free` 组；一个组只产出一个 `poolId`，于是 `hy4flash`
+  作为一个独立模型彻底消失，`orderedRoutesFor("hy4flash")` 返回空 → 402。
+- hy4 家族目录里只声明 `supportedEfforts: ["high"]`，`reasoningFields` 生成的
+  `thinkingLevelMap` 只有 `high`；`translateEffort` 于是把 `medium` 按距离打分改写成
+  `high`。实测上游对 `reasoning_effort` 完全不校验：hy4flash / hy4flash-free / hy4std ×
+  low|medium|high|xhigh|max 共 18 次探测全部 200，从未出现 400
+  `invalid_reasoning_effort` / code 11133。声明面比接受面窄。
+
+### 修复
+
+- `lib/shared/pool.js`：新增 `curatedEntryOfId(raw)`；`mergedModelGroups` 只有在
+  「本组未被白名单点名」或「两组的白名单条目是同一条」时才允许按 `name` key 合并。
+  同名但各自被点名的模型（`hy4flash` / `hy4flash-free`）于是保持两个独立 `poolId`。
+- `lib/providers/workbuddy/index.js`：新增 `MEASURED_EFFORT_ACCEPTANCE` 实测表与
+  `measuredEfforts(id)`，`reasoningFields` 里以「实测 > 目录声明 > 探测结果」取值。
+  目前只登记 `/^hy4(?:std|flash|flash-free)?$/`，放宽为 low/medium/high/xhigh/max；
+  `off` / `minimal` 仍恒为 `null`，不会因为放宽而多出关思考的档位。
+- `~/.hindsight/start-daemon.ps1` / `run-daemon.ps1`：5 个 scope 的 `_LLM_MODEL` 改成
+  `hy4flash`，5 个 `_REASONING_EFFORT` 改成 `medium`。
+
+### 回归
+
+- 池 `/v1/models` 从 29 → 30 条，`hy4flash-free` / `hy4std` / `hy4flash` 三条并存。
+- 直打池 `model=hy4flash` + `reasoning_effort=medium`：200，SSE 正常（先
+  `reasoning_content` 后 `content`，上游 `model` 字段 `hy4-flash`）。
+- `translateEffort` 单元探针：新 map 下 `medium → medium`，旧 map（只有 high）下
+  `medium → high` —— 证明改写确由白名单表达力造成。
+- daemon 重启后 5 个 scope 全部 `model=hy4flash`；`hindsight_ingest_document` 触发真实
+  调用：bridge 记录 `aggregated hy4flash -> 5850 content.len=1822/4172 finish=stop`，
+  daemon `STREAMING RETAIN COMPLETE: 3 units` / `CONSOLIDATION COMPLETE: 73.137s` /
+  `completed: 3 processed`。
+
+### 静态防线
+
+- `scripts/check-all.mjs` 新增四条断言：`curatedEntryOfId` 存在、`nameKeyUsable` 参与
+  keys 构造、`MEASURED_EFFORT_ACCEPTANCE` 存在、`reasoningFields` 用 `measured ??`。
 ## 工具链：插件改动自动同步 GitHub（2026-11-16）
 
 - 新增 `scripts/gh-push.mjs`（`npm run sync`）：先试原生 `git push`，本机 `github.com:443`
@@ -12,6 +60,115 @@
 - `.git/hooks/post-commit` 提交后后台执行同步，日志 `~/.dsh/gh-sync.log`；
   `git config --local dsh.autosync false` 或 `DSH_NO_AUTOSYNC=1` 可临时关闭。
 - 约定写进 `AGENTS.md`，后续会话据此执行。
+## 维护：记忆插件的 LLM 从 hy3 迁到 minimax-m3.1-flash（2026-11-16）
+
+### 现象
+
+- Hindsight 记忆 daemon（`~/.hindsight`，监听 9077）的 retain / reflect / consolidation
+  全部失败，`daemon-stdout.log` 里每 5 分钟一行 `Scheduled mental model refresh:
+  scheduled 0 model(s), 6 paused after a failed refresh`。
+### 根因
+
+- WorkBuddy 上游目录把 `hy3` / `hy3-x` / `hy4-preview` / `hy4free` 全部换成了 hy4 家族
+  （`hy4std` / `hy4flash-free` / `hy4flash`），旧 id 在目录里已不存在；
+  池的 `CURATED_MODELS` 白名单又没登记新 id → `/v1/models` 里查不到、请求直接 402
+  `pool_exhausted`，daemon 拿不到任何可用模型。
+- 另外 hy4 家族全部 `onlyReasoning: true`，正文写在 `reasoning_content` 里，
+  `content` 是空串；`hindsight-sse-bridge` 聚合 SSE 时不回填，记忆抽取会拿到空正文。
+### 修复
+
+- `lib/shared/pool.js` 的 `CURATED_MODELS`：删掉死 id `hy4free` / `hy3`，
+  新增 `hy4flash-free`（0 倍率免费档、960k ctx）、`hy4std`、`hy4flash`，共 29 条。
+- `hindsight-sse-bridge/bridge.mjs`：聚合时若 `content` 为空而 `reasoning_content` 非空，
+  回填 `reasoning_content`（与池内核同语义）。
+- `~/.hindsight/start-daemon.ps1` / `run-daemon.ps1`：5 个 scope 的 `_LLM_MODEL`
+  从 `hy3` 改为 `minimax-m3.1-flash`（0.08x、1M ctx、实测 ~3s、strict-JSON 3/3 稳定）。
+### 回归
+
+- 真桥实测：`minimax-m3.1-flash` / `glm-5.3-flash` / `step-5-preview` / `deepseek-v4.1-flash`
+  / `space-bunny` / `kimi-k3.1-pro` 均 200 且 JSON 合法；`hindsight-auto` 落到 `gemini-4-argon`
+  慢 5-10 倍；`nvidia/nemotron-3-ultra-550b-a55b0-free`、`doubao-seed-2.1-turbo`、
+  `mimo-v2.6-flash`、`qwen3.8-flash` 都是 502。
+- daemon 重启后 `LLM: provider=openai, model=minimax-m3.1-flash` 五行齐全；
+  写一条文档触发 retain → `store=PostgresMemories docs=1`、`[CONSOLIDATION] processed=2/2`。
+## ux-v21（2026-11-16）
+
+### 跨平台：`verify-uxv10.mjs` 不再手写 Windows 反斜杠、README 数字回正
+
+- 现象：`scripts/verify-uxv10.mjs` 第 6 行是 `pathToFileURL(ROOT + '\\' + p)` —— 反斜杠是
+  Windows 专有分隔符，在 POSIX 上会被当成文件名字符，`npm run verify` 直接 import 失败；
+  同时 README 端点表还写着 `models[28]`。
+- 修复：改成 `import { join } from "node:path"` + `const u = (p) => pathToFileURL(join(ROOT, p)).href`；
+  README 第 26 行 `models[28]` → `models[29]`，并补上内核标记 `patch`（当前 `ux-v21`），
+  与 `GET /plugins/dsh-pool/status` 现读一致。
+- 回归：`npm run check && npm run verify`，`ALL_ASSERTIONS_PASSED`。
+
+### 用量记账：SSE 逐帧解析取代 16KB 滑窗扫描
+
+- 现象：旧的 `createUsageTap` 用 16KB 滑窗 + `scanUsage()` 在**原始响应文本**里 indexOf
+  `"usage"` 字面量。模型正文只要输出一句 `{"usage": {"prompt_tokens": 999999}}`，
+  就会被当成真用量记进账本，积分曲线凭空多一笔；而且每个 chunk 都要重扫整个窗口。
+- 修复：`lib/shared/usage.js` 改为按 SSE 帧解析 —— `lineBuf` 按 `\n` 切行、去行尾 `\r`，
+  只认行首 `data:` 的帧，帧体 `JSON.parse` 后从 `parsed.usage`（兼容 `parsed.message.usage`
+  与 `parsed.response.usage`）取用量，`sawSseData` 标记这条流到底是不是 SSE。
+  `matchBrace` / `scanUsage` 两个函数整体删除，正文文本从此不参与记账判定。
+- 非流式兜底：整条流始终没有 `data:` 帧时，缓冲整包正文在 `flush` 做一次 `JSON.parse`
+  提取 `usage`；上限 `NON_STREAM_KEEP = 4MB`（原 `SCAN_KEEP = 16KB` 已无引用），超限直接
+  放弃这次统计，不为了记账把内存吃穿。
+- 回归：`scripts/usage-selftest.mjs` 新增四条断言 —— 一帧被切成 5 块（连 `data:` 前缀
+  本身都被劈开、CRLF 行尾）仍准确提取；`delta.content` 里含伪
+  `"usage": {"prompt_tokens": 999999}` 不记账（真值仍取 4/2/6）；非流式整包 JSON 兜底成立；
+  历史日聚合缓存不改变结果。`pass: 15`。
+
+### 面板文档：已封账历史日加单日聚合缓存
+
+- 现象：面板每 120s 轮询一次 `usageDocument()`，每次都把全部历史日从头 `aggregateDays`
+  重算一遍（日/周/月/总四个窗口 + 14 天 trend 各算一次），账本越长越慢。
+- 修复：模块级 `dayAggCache = new Map()`（key `YYYY-MM-DD`，上限 `DAY_AGG_CACHE_MAX = 512`，
+  超了淘汰最早插入的那天）。只有 `date < today` 的历史日进缓存，**当天永远实时算**；
+  `ensureLoaded()` 换账本对象时 `dayAggCache.clear()`。
+- 失效点（只在数据真变了的时候打掉，轮询重放不打掉）：`applyEvent` 记账后、`importCodearts`
+  三处增量分支（requests / tokens / failures，均只在 `delta > 0` 时）、`noteCreditObservation`
+  改历史日积分时、`platformBucket` 的显示名改写分支。`aggregateDays` 的内层循环抽成
+  `dayPlatformMap(day)`/`dayAggMapOf(date, day)`，四舍五入 / share / 排序逻辑一字未动。
+- 回归：同一账本连调两次 `usageDocument()`，`windows.all.platforms` 三元组、服务数与
+  `trend.requests` 全等；再写一条历史日事件后该路由请求数 +1（证明失效生效）。
+
+### 拆分：`lib/providers/pool/index.js` 1983 → 1425 行
+
+- `lib/providers/pool/classifier.js`（新增，148 行）：八个纯函数一字不动地迁出 ——
+  `looksLikeQuota`、`streamQuotaError`、`looksLikeUpstreamRejection`、`str`、
+  `firstJsonObject`、`structuredFailureKind`、`localGateRefusal`、`looksLikeAuthFailure`。
+  无 IO、无模块状态、无副作用。
+- `lib/providers/pool/routes-builtin.js`（新增，458 行）：`bailianRoute` + BSS 签名辅助、
+  `qiniuRoute` + 七牛辅助 + 两个 key reader 迁出；自带一份同值 `NO_COST`。
+  `index.js` 里随之删掉只服务于它们的 `createHash` / `createHmac` / `readFile` import。
+- 静态断言同步改指向 `classifier.js`（`check-all.mjs` 的 `localGateRefusal` / `str`，
+  `check-hardening.mjs` 的 `firstJsonObject` / `localGateRefusal`）；`check-all.mjs` 的
+  `structuredFailureKind` 一行**故意留在 `index.js`** —— 它查的是「接线」不是「定义」。
+  `POOL_STATUS_PATH`、`ux-v21`、`directFetch`、`pool_gate_blocked`、`BOOT_PLACEHOLDER`
+  等断言原样保留。
+- 回归：`npm run check` 退出 0、`npm run verify:e2e` 全部 PASS、`check-imports` 报
+  「跨模块裸调用 0 处」。
+
+### 客户端：裸 `setTimeout` 收口成 `later(fn, ms)`
+
+- `lib/client.js` 新增 `createLaterBag()`（factory 作用域，classic script 内，无顶层
+  import/export）：每次 `later(fn, ms)` 把 timer ID 记进 `Set`，回调跑完自动摘除；
+  `clearLater()` 一次清空整袋。
+- 收口的 15 处延迟刷新/状态复位：模型刷新提示 6000（原 ref 单槽）、`setPref` 的 400、
+  签到后 1500 与 5000、复制摘要 2200、`caLogin` 的 1200/4000/10000、侧栏焦点 0、
+  codearts 的 1200/4000/10000、800、300。对应作用域各自持有袋子（`poolTimers` 模块级、
+  `panelTimers` / `navTimers` / `laterBag` 组件级），组件卸载或面板关闭时统一
+  `clearLater()`。
+- `AbortController` 的三个超时定时器**按设计留在原地**（`loadPool` / codearts `load` /
+  codearts `post`，都在 `finally` 里无条件 `clearTimeout`，与组件生命周期无关）。
+- 回归：`node --check lib/client.js` 通过；全文件残留裸 `setTimeout(` 只剩 4 处（1 处是
+  `createLaterBag` 内部 + 上面 3 个 AbortController）；module-loader 契约锚点计数不变
+  （`window.__ModuleLoader__.load({`=1、`factory: (require) => {`=1、`CONTRIBUTIONS` 仍在）；
+  `npm run check` 退出 0。
+
+
 ## ux-v20（2026-11-16）
 
 ### 修复：Qoder 会话一过期，面板那条路由就红「暂不可用」，只能手工重灌

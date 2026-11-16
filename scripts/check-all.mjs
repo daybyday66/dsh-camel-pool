@@ -85,19 +85,28 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v20"', "内核版本标记已升 ux-v20");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v21"', "内核版本标记已升 ux-v21");
 // ux-v19：池转发的兜底抓取必须是 directFetch，不能回落 globalThis.fetch。
 // billion-context 用 defineProperty 接管全局 fetch 并把自己重链到最外层，未声明
 // route.fetch 的路由（trae/trae2/qoder/workbuddy/bailian/qiniu）于是被它的
 // silent-direct 闸门本地 422 掉 —— 上游一次没被打到，池却报「所有路由都失败」。
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'entry.route.fetch === "function" ? entry.route.fetch : directFetch', "池转发兜底走直连（不回落全局 fetch）");
 mustNotContain(path.join(ROOT, "lib/providers/pool/index.js"), "? entry.route.fetch : fetch;", "池转发不再回落 globalThis.fetch");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "function localGateRefusal(status, text)", "本机拦截层（bili gate）单独可辨识");
+mustContain(path.join(ROOT, "lib/providers/pool/classifier.js"), "export function localGateRefusal(status, text)", "本机拦截层（bili gate）单独可辨识");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'type: "pool_gate_blocked"', "全池被闸门拦时不再误报 pool_exhausted");
 // 闸门分支绝不能记熔断：进程级闸门会把十条路由一起冷却 60s，下一个请求照样全灭。
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'kind: "gate", gate', "闸门失败带 gate 分类但不进熔断");
+// hy4 家族：同名不同 id 的模型各自被白名单点名时，不能按 name key 合并成一组。
+// 合并的后果是 hy4flash 整个消失（一组只产出一个 poolId），请求直接 402 pool_exhausted。
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "function curatedEntryOfId(raw)", "白名单条目按 id 反查（供合并判定）");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "const nameKeyUsable =", "同名合并不许跨白名单条目");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "if (nameKeyUsable) keys.push(nameGroupKey);", "name key 按判定条件才登记");
+// 目录只声明 supportedEfforts=["high"]，但上游实测接受 low/medium/high/xhigh/max。
+// 不补这张表，translateEffort 会把用户选的 medium 距离匹配改写成 high。
+mustContain(path.join(ROOT, "lib/providers/workbuddy/index.js"), "MEASURED_EFFORT_ACCEPTANCE", "实测 effort 接受表在位");
+mustContain(path.join(ROOT, "lib/providers/workbuddy/index.js"), "const measured = measuredEfforts(info.id);", "声明前先查实测表");
 // 跨模块裸调用防线：structuredFailureKind 用的 str 曾在别处才有定义，运行时才炸。
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "function str(value) {", "池内核自带 str 助手（不再借用 codearts 的）");
+mustContain(path.join(ROOT, "lib/providers/pool/classifier.js"), "export function str(value) {", "池内核自带 str 助手（不再借用 codearts 的）");
 mustContain(path.join(ROOT, "scripts/check-imports.mjs"), "findLeakedHelpers", "跨模块裸调用静态闸在位");
 // 设置写入白名单必须覆盖 schema 里所有可切换键 —— 漏一个的后果是面板开关点了 400
 // no-whitelisted-field，而客户端把 400 当"失败保留原值"，用户看到开关弹回去、

@@ -23,7 +23,7 @@
 
 | 端点 | 用途 |
 |---|---|
-| `GET /plugins/dsh-pool/status` | 积分池状态：`credits.total`、`pool.routes[10]`、`models[28]`、`pool.order`、`pool.broken` |
+| `GET /plugins/dsh-pool/status` | 积分池状态：`credits.total`、`pool.routes[10]`、`models[29]`、`pool.order`、`pool.broken`、内核标记 `patch`（当前 `ux-v21`） |
 | `GET /plugins/dsh-connect/status` | 渠道聚合状态（4 渠道 signed-in / credits / checkin.state） |
 | `POST /plugins/dsh-connect/checkin` | 一键签到（全部渠道） |
 | `POST /plugins/dsh-connect/checkin/<id>` | 单渠道签到 |
@@ -63,7 +63,7 @@
 
 **自动签到。** 沿用原机制：客户端所有 `useHubStatus()` 调用统一带 `?auto=1`（`lib/client.js` 的 `fetch(\`${STATUS_PATH}?auto=1\`)`），宿主 `lib/panel.js` 的 status handler 判 `prefsNow.autoCheckin === true && url.includes("auto=1")`，在扇出 `probeAll(..., { autoCheckin: auto })` 时顺带幂等领取当天可领积分。**没有额外定时器**，重复打开只领一次、不重复扣分。偏好项 `autoCheckin` 默认 `true`，可在设置里关掉（新额度面板的开关也写这个键）。新额度面板**刻意不触发第二次 `?auto=1`**，只读 `/plugins/dsh-pool/status`（首屏不带 refresh，打开弹窗时补一次 `?refresh=1`），避免并发重复 claim。
 
-**一个下拉装下三家 + 池。** WorkBuddy（国区/国际版多槽位）、Qoder CN、Trae CN 的免费额度合进一个模型列表，按渠道分组旁标积分倍率；`dsh-pool` 作为独立一组出现，含 `hy4free` 等 28 个模型（叠加 CodeArts 5 个 + Gemini 6 个，与老渠道同 id 的自动合并成一条）。中途换渠道历史不断。三家协议（OpenAI 方言 / 私有 agent 协议 / 自定义编码流）由本包在中间翻译。
+**一个下拉装下三家 + 池。** WorkBuddy（国区/国际版多槽位）、Qoder CN、Trae CN 的免费额度合进一个模型列表，按渠道分组旁标积分倍率；`dsh-pool` 作为独立一组出现，含 `hy4flash-free` 等 29 个模型（叠加 CodeArts 5 个 + Gemini 6 个，与老渠道同 id 的自动合并成一条）。中途换渠道历史不断。三家协议（OpenAI 方言 / 私有 agent 协议 / 自定义编码流）由本包在中间翻译。
 
 **池调度。** `order: "credits-first"` 按剩余额度挑路由（可切 `voucherFirst` 让百炼券殿后）；402/429 自动 latch 熔断 60s 换下一条；`xhigh` → `max` 档位降级；真实请求写 `.pool-route.log`，只记 `tokenLen` 不含任何凭据。
 ### 当日额度优先（`poolBurnExpiringFirst`，默认开）
@@ -184,10 +184,10 @@ registerPoolRoute({
 ## 验收清单（规格 8.4）
 
 1. `lib/**/*.js` 与 `scripts/**/*.mjs` 全部 `node --check` 通过；
-2. `GET /plugins/dsh-pool/status` 200，`routes=10`、`models=28`、`pool.broken=[]`、`active=true`；
+2. `GET /plugins/dsh-pool/status` 200，`routes=10`、`models=29`、`pool.broken=[]`、`active=true`；
 3. `?refresh=1` 后 `credits.total ≈ 9318.21`；
 4. `GET /plugins/dsh-connect/status` 4 渠道 `signed-in`、`issues:0`；
-5. 模型选择器出现 `dsh-pool` 分组，含 `hy4free`；
+5. 模型选择器出现 `dsh-pool` 分组，含 `hy4flash-free`；
 6. `poolEnabled` 切换立即生效；
 7. `poolVoucherFirst` 切换改变 `pool.order`；
 8. 真实池请求写 `.pool-route.log`，`tokenLen` 有值、**无任何凭据**；

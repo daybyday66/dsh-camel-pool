@@ -82,11 +82,11 @@ mustContain("lib/shared/node.js", "renameSync(tmp, path);", "状态文件原子�
 mustContain("lib/channel-registry.js", "${process.pid}", "注册表临时文件唯一化");
 mustContain("lib/panel.js", "path: HUB_CHECKIN_ROUTE + \"/\"", "签到前缀路由与 exact 错开");
 mustContain("lib/panel.js", "if (id === \"\") {", "裸签到路径回退一键签到");
-mustContain("lib/providers/pool/index.js", "function firstJsonObject(text)", "结构化错误体宽松解析");
+mustContain("lib/providers/pool/classifier.js", "export function firstJsonObject(text)", "结构化错误体宽松解析");
 mustContain("lib/providers/pool/index.js", "cancelled.catch(() => {});", "probe 超时取消不产生未处理 rejection");
 mustContain("lib/providers/pool/index.js", "kind });", "失败路由带分类");
 mustContain("lib/providers/pool/index.js", "const routeFetch = typeof entry.route.fetch === \"function\" ? entry.route.fetch : directFetch;", "池转发兜底直连（billion-context 接管全局 fetch 后不再被本地 422）");
-mustContain("lib/providers/pool/index.js", "function localGateRefusal(status, text)", "本机拦截层（bili gate）单独可辨识");
+mustContain("lib/providers/pool/classifier.js", "export function localGateRefusal(status, text)", "本机拦截层（bili gate）单独可辨识");
 
 if (failed > 0) {
   console.error("[hardening] FAILED " + failed + " assertion(s)");

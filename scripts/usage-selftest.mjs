@@ -137,6 +137,94 @@ check("SSE 探针结果", () => {
   assert.equal(tapped.usage.credits, 1);
 });
 
+/** 把同一份响应按给定切片喂进探针，收集透传文本与聚合出来的 usage。 */
+const runTap = (parts) =>
+  new Promise((resolve, reject) => {
+    let seen;
+    const tap = m.createUsageTap((u) => { seen = u; });
+    const chunks = [];
+    tap.on("data", (c) => chunks.push(c.toString("utf8")));
+    tap.on("end", () => resolve({ usage: seen, text: chunks.join("") }));
+    tap.on("error", reject);
+    for (const p of parts) tap.write(Buffer.from(p, "utf8"));
+    tap.end();
+  });
+
+/* 6a. 一条 SSE 帧被劈成多个 chunk（连 "data:" 前缀本身都被劈开、行尾是 CRLF）仍能取到 usage */
+const frameA = JSON.stringify({
+  choices: [{ delta: { content: "你好" } }],
+  usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10, credits: 0.25 },
+});
+const streamA = "data: " + frameA + "\r\n\r\ndata: [DONE]\r\n\r\n";
+const cuts = [2, 6, 9, 27, 58];
+const piecesA = [];
+let cursorA = 0;
+for (const cut of cuts) {
+  if (cut <= cursorA || cut >= streamA.length) continue;
+  piecesA.push(streamA.slice(cursorA, cut));
+  cursorA = cut;
+}
+piecesA.push(streamA.slice(cursorA));
+const splitFrame = await runTap(piecesA);
+check("跨 chunk 拆帧的 SSE 仍能提取 usage", () => {
+  assert.equal(piecesA.length >= 3, true, "确实是多块传入");
+  assert.equal(splitFrame.usage.input, 7);
+  assert.equal(splitFrame.usage.output, 3);
+  assert.equal(splitFrame.usage.total, 10);
+  assert.equal(splitFrame.usage.credits, 0.25);
+  assert.equal(splitFrame.text, streamA, "探针必须零修改透传每一块");
+});
+
+/* 6b. 正文 delta.content 里出现伪 "usage": {...} 时不得被记账 */
+const fakeContent = '这段正文里写着伪 usage：{"usage": {"prompt_tokens": 999999}}';
+const frameB1 = "data: " + JSON.stringify({
+  choices: [{ delta: { content: fakeContent } }],
+  usage: { prompt_tokens: 4, completion_tokens: 2 },
+}) + "\n\n";
+const frameB2 = "data: " + JSON.stringify({
+  choices: [{ delta: { content: '{"usage": {"prompt_tokens": 999999}}' } }],
+}) + "\n\n";
+const fakeUsage = await runTap([frameB1, frameB2, "data: [DONE]\n\n"]);
+check("正文伪 usage 字面量不记账", () => {
+  assert.equal(fakeUsage.usage.input, 4, "只有真帧的 usage 生效，正文那串 999999 不算数");
+  assert.equal(fakeUsage.usage.output, 2);
+  assert.equal(fakeUsage.usage.total, 6);
+  assert.equal(fakeUsage.usage.credits, 0);
+});
+
+/* 6c. 非流式整包 JSON（没有 data: 前缀）走 flush 兜底解析 */
+const packedBody = JSON.stringify({
+  id: "chatcmpl-1",
+  choices: [{ message: { role: "assistant", content: '正文里也有 "usage": {"prompt_tokens": 5}' } }],
+  usage: { prompt_tokens: 11, completion_tokens: 6, total_tokens: 17, credits: 1.5 },
+});
+const packedCut = Math.floor(packedBody.length / 2);
+const packed = await runTap([packedBody.slice(0, packedCut), packedBody.slice(packedCut)]);
+check("非流式整包 JSON 兜底提取 usage", () => {
+  assert.equal(packed.usage.input, 11);
+  assert.equal(packed.usage.output, 6);
+  assert.equal(packed.usage.total, 17);
+  assert.equal(packed.usage.credits, 1.5);
+  assert.equal(packed.text, packedBody, "整包依旧零修改透传");
+});
+
+/* 6d. 历史日聚合缓存：重复取文档数字不变，写入历史日后立刻可见 */
+check("历史日聚合缓存不改变结果", () => {
+  const a = m.usageDocument();
+  const b = m.usageDocument();
+  assert.deepEqual(
+    b.windows.all.platforms.map((p) => [p.key, p.requests, p.tokens.total, p.credits]),
+    a.windows.all.platforms.map((p) => [p.key, p.requests, p.tokens.total, p.credits]),
+    "缓存命中不应改变任何数字",
+  );
+  assert.equal(b.windows.all.requests, a.windows.all.requests);
+  assert.deepEqual(b.trend.map((x) => x.requests), a.trend.map((x) => x.requests));
+  const pick = (doc) => doc.windows.all.platforms.find((x) => x.key === "trae").requests;
+  const before = pick(m.usageDocument());
+  m.recordUsageEvent({ ev: "served", at: "2026-11-13T03:00:00.000Z", route: "trae", model: "m-b" });
+  assert.equal(pick(m.usageDocument()), before + 1, "写历史日后缓存必须失效，否则这里会读到旧值");
+});
+
 /* 7. 积分余额下降，扣掉上游直报 credits */
 check("noteCreditObservation 基线", () => {
   m.noteCreditObservation("workbuddy:wb1", 1000, now);
