@@ -3,6 +3,15 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 工具链：插件改动自动同步 GitHub（2026-11-16）
+
+- 新增 `scripts/gh-push.mjs`（`npm run sync`）：先试原生 `git push`，本机 `github.com:443`
+  被阻断时自动改走 GitHub Git Data API（blob → tree → commit → `PATCH .../git/refs/heads/main`）。
+  commit 对象按 `git cat-file commit` 的原始字节重建，远端 SHA 与本地逐字一致，后续走增量。
+- token 存放在 `~/.dsh/camel-pool-gh.token`（ACL 只给当前 SID 读权限），不写进仓库与 `.git/config`。
+- `.git/hooks/post-commit` 提交后后台执行同步，日志 `~/.dsh/gh-sync.log`；
+  `git config --local dsh.autosync false` 或 `DSH_NO_AUTOSYNC=1` 可临时关闭。
+- 约定写进 `AGENTS.md`，后续会话据此执行。
 ## ux-v20（2026-11-16）
 
 ### 修复：Qoder 会话一过期，面板那条路由就红「暂不可用」，只能手工重灌
