@@ -16,6 +16,8 @@ import {
   setLatch,
   clearBreakers,
   poolStatusDocument,
+  mergedModelGroups,
+  routeModelDiagnostics,
 } from "../lib/shared/pool.js";
 import { HIDE_ALL_SENTINEL } from "../lib/shared/hidden.js";
 
@@ -144,6 +146,74 @@ const releaseHidden = registerPoolRoute(hiddenRoute);
 const activeRoutes = orderedRoutesFor(MODEL, {}).map((item) => item.routeKey);
 ok("HIDE_ALL_SENTINEL 禁用整条池路由", !activeRoutes.includes("disabled-wb"), activeRoutes);
 releaseHidden();
+
+// ux-v29：Trae 兜底 id 不再被白名单静默过滤 + 诊断能说出丢了谁
+const releaseOfficial = registerPoolRoute({
+  ...fakeRoute("trae-official", 1, { status: "signed-in", credits: { remaining: 5, total: 5 } }),
+  models: () => [
+    { id: "DeepSeek-V4-Flash-Official", name: "DeepSeek-V4-Flash Official", contextWindow: 1000, maxTokens: 100, input: ["text"] },
+    { id: "Some-Unlisted-Model-XYZ", name: "Some Unlisted", contextWindow: 1000, maxTokens: 100, input: ["text"] },
+  ],
+});
+const groups = mergedModelGroups({});
+ok("Trae 兜底 Official id 进模型库", groups.some((g) => g.poolId === "deepseek-v4-flash-official"), groups.map((g) => g.poolId));
+const diag = routeModelDiagnostics().find((d) => d.key === "trae-official");
+ok("诊断记下被过滤的 id", diag?.rawModelCount === 2 && diag?.curatedModelCount === 1 && (diag?.droppedModels ?? []).includes("some-unlisted-model-xyz"), diag);
+releaseOfficial();
+
+// ux-v30：mergedModelGroups 每路由只调一次 models()，且注销清诊断
+let modelCalls = 0;
+const countingRoute = {
+  ...fakeRoute("counting", 1, { status: "signed-in", credits: { remaining: 1, total: 1 } }),
+  models: () => { modelCalls += 1; return [{ id: MODEL, name: "DeepSeek-V4.1-Flash", contextWindow: 1000, maxTokens: 100, input: ["text"] }]; },
+};
+const releaseCounting = registerPoolRoute(countingRoute);
+modelCalls = 0;
+mergedModelGroups({});
+ok("mergedModelGroups 每路由只调一次 models()", modelCalls === 1, modelCalls);
+const diagBefore = routeModelDiagnostics().find((d) => d.key === "counting");
+ok("诊断里有 counting 路由", diagBefore?.rawModelCount === 1, diagBefore);
+releaseCounting();
+ok("注销后诊断不再有幽灵条目", !routeModelDiagnostics().some((d) => d.key === "counting"), routeModelDiagnostics().map((d) => d.key));
+
+// ux-v31：非数组 models() 不得打挂整池（v1.0.4 回归：Set / 字符串 / 对象）
+for (const bad of [new Set([{ id: MODEL }]), "nope", { a: 1 }]) {
+  const off = registerPoolRoute({ ...fakeRoute("bad-models", 1, { status: "signed-in", credits: { remaining: 1 } }), models: () => bad });
+  let threw = false;
+  try { mergedModelGroups({}); } catch { threw = true; }
+  ok("非数组 models() 不抛（" + Object.prototype.toString.call(bad) + "）", !threw);
+  // Set 应被展开成 1 条，字符串 / 对象当空；无论如何不影响其他路由
+  const diagBad = routeModelDiagnostics().find((d) => d.key === "bad-models");
+  ok("非数组 models() 诊断条数合理", diagBad?.rawModelCount === (bad instanceof Set ? 1 : 0), diagBad);
+  off();
+}
+// ux-v32：归一化展开本身抛错也不得打穿整池（迭代器中途抛 / getter 抛）
+for (const [label, bad] of [
+  ["迭代器中途抛", { [Symbol.iterator]: function* () { yield { id: MODEL }; throw new Error("mid-iteration"); } }],
+  ["Symbol.iterator getter 抛", (() => { const o = {}; Object.defineProperty(o, Symbol.iterator, { get() { throw new Error("getter blew up"); } }); return o; })()],
+  ["迭代器立即抛", { [Symbol.iterator]: () => { throw new Error("iterator blew up"); } }],
+]) {
+  const off = registerPoolRoute({ ...fakeRoute("bad-iterator", 1, { status: "signed-in", credits: { remaining: 1 } }), models: () => bad });
+  let threw = false;
+  try { mergedModelGroups({}); } catch { threw = true; }
+  ok("抛错的迭代器不打挂整池（" + label + "）", !threw);
+  const diagBad = routeModelDiagnostics().find((d) => d.key === "bad-iterator");
+  ok("抛错的迭代器诊断记 0 条（" + label + "）", diagBad?.rawModelCount === 0, diagBad);
+  off();
+}
+// droppedModels 上限 8 条
+const manyUnlisted = Array.from({ length: 12 }, (_, i) => ({ id: "unlisted-" + i, name: "U" + i, contextWindow: 1000, maxTokens: 100, input: ["text"] }));
+const offMany = registerPoolRoute({ ...fakeRoute("many-unlisted", 1, { status: "signed-in", credits: { remaining: 1 } }), models: () => manyUnlisted });
+mergedModelGroups({});
+const diagMany = routeModelDiagnostics().find((d) => d.key === "many-unlisted");
+ok("droppedModels 上限 8 条", (diagMany?.droppedModels ?? []).length === 8 && diagMany?.rawModelCount === 12, diagMany);
+offMany();
+// hiddenModelCount 有读数
+const offHidden = registerPoolRoute({ ...fakeRoute("hidden-one", 1, { status: "signed-in", credits: { remaining: 1 } }), hidden: () => [MODEL], models: () => [{ id: MODEL, name: "DeepSeek-V4.1-Flash", contextWindow: 1000, maxTokens: 100, input: ["text"] }, { id: "hy4flash-free", name: "Hy4 flash", contextWindow: 1000, maxTokens: 100, input: ["text"] }] });
+mergedModelGroups({});
+const diagHidden = routeModelDiagnostics().find((d) => d.key === "hidden-one");
+ok("hiddenModelCount 计入被 hidden() 滤掉的模型", diagHidden?.hiddenModelCount === 1 && diagHidden?.rawModelCount === 2, diagHidden);
+offHidden();
 
 releaseCodearts();
 releaseTrae();

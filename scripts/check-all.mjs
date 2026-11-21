@@ -74,7 +74,12 @@ mustNotContain(path.join(ROOT, "lib/providers/gemini/index.js"), "libraryBypass:
 mustNotContain(path.join(ROOT, "lib/shared/pool.js"), "hasLibraryBypassRoute", "白名单无绕过分支");
 mustContain(path.join(ROOT, "lib/providers/gemini/index.js"), "setExternalHidden", "gemini 隐藏钩子已接线");
 mustContain(path.join(ROOT, "lib/providers/gemini/index.js"), "externalHidden(GEMINI_ROUTE_KEY)", "gemini hidden 读面板规则");
-mustContain(path.join(ROOT, "lib/index.js"), '["gemini", gemini]', "gemini 进 HOOKED_PROVIDERS");
+// ux-v22：Gemini 整组移出驼峰池 —— 反向断言，防止有人把接线又加回来。
+mustNotContain(path.join(ROOT, "lib/index.js"), '["gemini", gemini]', "gemini 不再进 HOOKED_PROVIDERS");
+mustNotContain(path.join(ROOT, "lib/index.js"), 'providers/gemini/index.js', "lib/index.js 不再 import gemini 模块");
+mustNotContain(path.join(ROOT, "lib/providers/pool/index.js"), "geminiRoute(", "池不再注册 gemini 路由");
+mustNotContain(path.join(ROOT, "lib/providers/pool/index.js"), "gemini-oauth", "池不再有 gemini OAuth 路由");
+mustNotContain(path.join(ROOT, "lib/shared/pool.js"), "gemini-4-argon", "白名单不再含 gemini 模型");
 
 // ── 4. ux-v14 断言（当日额度优先 / 结构化错误分类 / 版本可查）─────────
 mustContain(path.join(ROOT, "lib/shared/credit-expiry-policy.js"), "export function policyCreditExpiry", "官网积分政策模块在位");
@@ -85,7 +90,55 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v21"', "内核版本标记已升 ux-v21");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v36"', "内核版本标记已升 ux-v36");
+// ux-v29：路由「莫名其妙掉了」的三处根因回归闸。
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "deepseek-v4-flash-official", "Trae 兜底 id 进白名单（不再静默过滤）");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "export function routeModelDiagnostics", "路由掉线诊断函数在位");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "droppedModels", "状态文档透出被白名单丢掉的 id");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'entry.route.kind === "trae" ? 12000 : 6000', "Trae 首字节探测 12s（冷启动不再记熔断）");
+mustContain(path.join(ROOT, "lib/providers/trae/index.js"), "clearBreakers(instanceId)", "Trae 登录/续期成功清熔断");
+mustNotContain(path.join(ROOT, "lib/index.js"), "models-trae2.json", "trae2 不再读不存在的目录快照");
+mustNotContain(path.join(ROOT, "lib/client.js"), "geminiQuotaSec", "客户端已删 Gemini 死代码");
+mustContain(path.join(ROOT, "lib/client.js"), "showAllRoutes", "路由默认折叠开关在位");
+// ux-v30：DeepSeek 审计的四条补丁回归闸。
+mustContain(path.join(ROOT, "lib/client.js"), "const filteredRoutes = routes.filter", "折叠计数与展开态无关（按钮不会消失）");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "routeDiagnostics.delete(key)", "注销路由清诊断（不留幽灵条目）");
+mustNotContain(path.join(ROOT, "lib/client.js"), ".dcp-gq-grid", "Gemini 限额 CSS 已删干净");
+mustNotContain(path.join(ROOT, "lib/providers/gemini/oauth.js"), "请运行 `node scripts/gemini-oauth-login.mjs`", "Gemini 登录提示不再指已删脚本");
+mustNotContain(path.join(ROOT, "lib/shared/pool.js"), '["deepseek-v4-flash-official", "deepseek-v4-flash"]', "误导性别名已删（official id 本身已在白名单）");
+// ux-v31：DeepSeek 第二轮审计的回归闸。
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "modelList = Array.isArray(models)", "models() 返回值先归一化（P0：脏路由不打挂整池，ux-v32 起展开也在 try 内）");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "hiddenModelCount: diag.hiddenModelCount ?? 0", "hiddenModelCount 透出到 status（不再是死字段）");
+mustContain(path.join(ROOT, "lib/client.js"), "r.syntheticBalance === true", "无限量路由首屏可见（七牛）");
+mustContain(path.join(ROOT, "lib/client.js"), "accounts.length > positiveCount ? react.createElement", "全零余额时账号区按钮不消失");
+mustContain(path.join(ROOT, "lib/providers/trae/index.js"), "tickResult?.renewed === true", "Trae 只在凭据真变时清熔断");
+// ux-v32：DeepSeek 第三轮审计的回归闸。
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "modelList = Array.isArray(models)", "归一化展开包在 try 里（迭代器抛错不打穿 status）");
+mustContain(path.join(ROOT, "lib/client.js"), "const hasSynthetic = routes.some", "只剩 synthetic 路由时顶部不判不可用");
+mustContain(path.join(ROOT, "lib/client.js"), "noRoutes: '暂无路由'", "无路由时不再永远显示加载中");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'if (qiniuKey !== "")', "七牛有 key 才注册");
+mustContain(path.join(ROOT, "lib/providers/pool/routes-builtin.js"), 'if (key === "") throw new Error("QINIU_API_KEY 未配置', "七牛 credits() 没 key 不谎报 synthetic ok");
+// ux-v33：界面优化回归闸（截图复审）。
+mustContain(path.join(ROOT, "lib/client.js"), "unlimitedQuota: '不限额'", "unlimitedQuota 在面板自己的文案表里（不再原样泄漏 key）");
+mustContain(path.join(ROOT, "lib/client.js"), "const groupedAccounts = (() => {", "同名套餐聚合");
+mustContain(path.join(ROOT, "lib/client.js"), "const [showIdle, setShowIdle] = react.useState(false)", "零活动平台默认折叠");
+mustContain(path.join(ROOT, "lib/client.js"), "t('usageSuccess'", "用量行显示成功率而非裸占比");
+mustContain(path.join(ROOT, "lib/client.js"), "dcp-usage__trend-labels", "趋势图带起止日期");
+// ux-v36：自定义 OpenAI 兼容路由（面板直接加任意 API 路由）。这条链路跨五个文件，
+// 少任何一环都表现为「表单能填、模型不出现」—— 所以逐环上闸。
+mustContain(path.join(ROOT, "lib/channel-registry.js"), "custom: { multi: true }", "注册表认 custom 这个 kind");
+mustContain(path.join(ROOT, "lib/channel-registry.js"), "export function normalizeCustomBaseUrl", "上游地址归一化单一事实源");
+mustContain(path.join(ROOT, "lib/channel-registry.js"), "if (kind === \"custom\" && customBaseUrl === undefined) return undefined;", "custom 条目缺 baseUrl 直接丢弃");
+mustContain(path.join(ROOT, "lib/channel-registry.js"), 'kind: "custom",', "channelOf 有 custom 支（否则 allChannels 过滤掉、面板无行）");
+mustContain(path.join(ROOT, "lib/panel.js"), "return probeCustomChannel(channel);", "custom 探活走本地合成（不打空 statusPath）");
+mustContain(path.join(ROOT, "lib/panel.js"), "await readBody(req)", "hub 端点仍走统一 readBody");
+mustContain(path.join(ROOT, "lib/providers/pool/custom-routes.js"), "export function createCustomRoute", "注册表条目 → 池路由的转换器在位");
+mustContain(path.join(ROOT, "lib/providers/pool/custom-routes.js"), "export async function refreshCustomModels", "面板「更新模型」有实现");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "const releases = await registerCustomRoutes({", "start() 里真的调用了自定义路由装载");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "for (const release of releases) disposers.push(release);", "自定义路由随热重载回收（release 进 disposers）");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "const hasCustom = [...group.candidates.keys()].some", "白名单旁路：自定义模型不被静默过滤");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "customRouteKeys.add(route.key)", "旁路按 route.kind 收集自定义 key");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "synthetic: true", "旁路给合成 curated 条目（比较器读 c.tier 不抛）");
 // ux-v19：池转发的兜底抓取必须是 directFetch，不能回落 globalThis.fetch。
 // billion-context 用 defineProperty 接管全局 fetch 并把自己重链到最外层，未声明
 // route.fetch 的路由（trae/trae2/qoder/workbuddy/bailian/qiniu）于是被它的

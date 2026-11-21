@@ -75,7 +75,7 @@
 
 **自动签到。** 客户端所有 `useHubStatus()` 调用统一带 `?auto=1`（`lib/client.js` 的 `fetch(\`${STATUS_PATH}?auto=1\`)`），宿主 `lib/panel.js` 的 status handler 判 `prefsNow.autoCheckin === true && url.includes("auto=1")`，在扇出 `probeAll(..., { autoCheckin: auto })` 时顺带幂等领取当天可领积分。**没有额外定时器**，重复打开只领一次、不重复扣分。偏好项 `autoCheckin` 默认 `true`，可在设置里关掉（新额度面板的开关也写这个键）。新额度面板**刻意不触发第二次 `?auto=1`**，只读 `/plugins/dsh-pool/status`（首屏不带 refresh，打开弹窗时补一次 `?refresh=1`），避免并发重复 claim。
 
-**一个下拉装下三家 + 池。** WorkBuddy（国区/国际版多槽位）、Qoder CN、Trae CN 的免费额度合进一个模型列表，按渠道分组旁标积分倍率；`dsh-pool` 作为独立一组出现，含 `hy4flash-free` 等 26 个白名单模型（CodeArts 5 个与老渠道同 id 的自动合并成一条；Gemini 6 个已于 ux-v22 整组移出，不再进池）。模型数以 `GET /plugins/dsh-pool/status` 的 `models` 实测为准，README 不再硬写条数。中途换渠道历史不断。三家协议（OpenAI 方言 / 私有 agent 协议 / 自定义编码流）由本包在中间翻译。
+**一个下拉装下三家 + 池。** WorkBuddy（国区/国际版多槽位）、Qoder CN、Trae CN 的免费额度合进一个模型列表，按渠道分组旁标积分倍率；`dsh-pool` 作为独立一组出现，含 `hy4flash-free` 等 26 个白名单模型（CodeArts 5 个与老渠道同 id 的自动合并成一条；Gemini 6 个已于 ux-v22 整组移出，不再进池）。模型数以 `GET /plugins/dsh-pool/status` 的 `models` 实测为准，README 不再硬写条数。中途换渠道历史不断。三家协议（OpenAI 方言 / 私有 agent 协议 / 自定义编码流）由本包在中间翻译。**外加 ux-v36 起的自定义路由**：面板里自己填 `baseUrl` + 模型清单，任何 OpenAI 兼容上游都能挂进同一个下拉（见下方「自定义路由」一节）。
 
 **池调度。** `order: "credits-first"` 按剩余额度挑路由（可切 `voucherFirst` 让百炼券殿后）；402/429 自动 latch 熔断 60s 换下一条；`xhigh` → `max` 档位降级；真实请求写 `.pool-route.log`，只记 `tokenLen` 不含任何凭据。
 ### 当日额度优先（`poolBurnExpiringFirst`，默认开）
@@ -147,6 +147,44 @@ CodeArts 的每日签到 100 积分**当天 24:00 过期**，过期即归零。�
 
 ---
 
+## 自定义路由：面板里直接加任意 OpenAI 兼容 API（ux-v36）
+
+**别人下载这个插件后，不必改一行代码就能加自己的中转站 / 自建网关 / 任意 OpenAI 兼容上游。**
+渠道中心面板的「+ 添加渠道」里，类型选 **「自定义路由（任意 OpenAI 兼容 API）」**，填四项即可：
+
+| 字段 | 说明 |
+|---|---|
+| 渠道 ID | 小写字母开头，`[a-z0-9-]`，≤32 位；它同时是池路由 key、`channelId`、`providerId`、凭据文件名 |
+| 上游地址 | `baseUrl`，`http(s)://` 开头，例如 `https://api.example.com/v1`；末尾斜杠会被去掉 |
+| 请求路径 | 默认 `/chat/completions`。池转发 `POST <baseUrl><apiPath>`，请求体是标准 OpenAI 方言 |
+| 模型清单 | 上游要暴露的模型 id，逗号/分号/换行/顿号都能分隔，最多 64 个，顺序保留 |
+
+创建成功后按提示：
+
+1. **面板立刻可用**：新行出现在渠道列表里，点「粘贴」把 API Key 存进 `~/.dsh/connect-auth/<id>.key`（0600，纯文本，原样当 `Authorization: Bearer <key>` 发出去，不做任何形状校验）；
+2. **模型要重启 DSH 才出现**：provider 侧是冷装载的（与 workbuddy/trae/qoder 同一条规矩），重启后 `dsh-pool` 分组里才会多出这些模型；
+3. 模型名填错了不用重建渠道：改完上游后点该行的「更新模型」，插件会 `GET <baseUrl>/models`（把 `apiPath` 的 `/chat/completions` 换成 `/models`）拉清单并写回注册表；上游没有 `/models` 时会明确告诉你「该线路可能没有 /models，模型清单可以手填」，此时手改注册表里的 `models` 即可。
+
+### 与内置渠道的差异（都是刻意的）
+
+- **不过白名单**：`shared/pool.js` 的 `CURATED_MODELS` 只点名了 26 个模型 id。自定义路由的模型名由用户自填，因此走一条合成 curated 条目的旁路（`tier: 5`），**不改写 `poolId`**——请求里的 `model` 就是用户填的原名。
+- **没有签到、没有额度行**：它只是一条转发线路，「一键签到」对它报 `unsupported`，额度区不编造数字（上游没有余额接口时宁可不显示）。
+- **`priority: 5`**：排在 `qiniu`(-1) / `workbuddy`(0) / `trae`(1) / `qoder`(2) / `codearts`(3) 之后、`bailian`(9) 之前，即内置额度先用，自定义线路兜底。
+- **探活是本地合成的**：`channelOf()` 给它 `localOnly: true` 与空 `statusPath`，面板不发任何回环请求（否则会打到自己）；状态只看「Key 文件在不在」。
+- **禁用照常生效**：`disabledChannels: ["<id>"]` 整条下架，`disabledModels: ["<id>/<model>"]` 只下架单个模型。
+
+### 密钥去哪了
+
+三级读取，与七牛/百炼同一套语义（`lib/providers/pool/custom-routes.js` 的 `createCustomKeyReader`，缓存 10s）：
+
+1. 环境变量 `CUSTOM_<ID>_API_KEY`（id 里非 `[A-Za-z0-9]` 的字符换成 `_` 再大写，例如 `my-router` → `CUSTOM_MY_ROUTER_API_KEY`）；
+2. `~/.dsh/connect-auth/<id>.key`（面板「粘贴」写的就是这里）；
+3. 宿主凭据服务 `ctx.get("credentials").resolve(...)`。
+
+三者都空时该路由**不注册**（启动日志一条 warn，不影响内置渠道），配好后重启 DSH 即可。**没有任何地方会输出 key 明文**：`.pool-route.log` 只记 `tokenLen`。
+
+---
+
 ## 后续：添加更多渠道以扩充模型选择
 
 池内核对外只认一个契约 `registerPoolRoute(route)`（`lib/shared/pool.js:99-105` 硬校验）。新增一条渠道 = 在 `lib/providers/pool/index.js` 的 `apply()` 里多注册一个 route 对象：
@@ -169,7 +207,7 @@ registerPoolRoute({
 });
 ```
 
-注册完 `onPoolRoutesChanged` 会自动 `ctx.emit("llm/adapters-updated")`，模型下拉立刻出现新分组；`pool.status` 的 `routes[]` 也会多一条。参照现有路由（按 `priority` 升序）：`qiniu`(-1，合成余额)、`workbuddy:workbuddy1`/`workbuddy2`(0)、`trae`/`trae2`(1)、`qoder1`/`qoder2`(2)、`codearts`(3)、`bailian`(9，`providerId: "aliyun-bailian"`，`voucher: true` 强制殿后)。渠道侧的适配器同样在 `lib/index.js` 的渠道循环里按 `PROVIDERS` 追加即可。
+注册完 `onPoolRoutesChanged` 会自动 `ctx.emit("llm/adapters-updated")`，模型下拉立刻出现新分组；`pool.status` 的 `routes[]` 也会多一条。参照现有路由（按 `priority` 升序）：`qiniu`(-1，合成余额)、`workbuddy:workbuddy1`/`workbuddy2`(0)、`trae`/`trae2`(1)、`qoder1`/`qoder2`(2)、`codearts`(3)、`custom:<id>`(5，用户在面板里自建，**不需要改代码**，见上方「自定义路由」一节)、`bailian`(9，`providerId: "aliyun-bailian"`，`voucher: true` 强制殿后)。渠道侧的适配器同样在 `lib/index.js` 的渠道循环里按 `PROVIDERS` 追加即可。
 
 **路线 A（后续升级）**：若想把池内核真正拆成一个独立 npm 包、由多个插件共享同一份状态，用 `globalThis[Symbol.for("dsh-pool.state.v1")]` 做跨包单例（规格 8.3 首选方案），避免两份内核各自维护 latches/credits 缓存。当前路线 B 已满足独立化目标，暂不需要。
 

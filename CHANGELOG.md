@@ -3,6 +3,31 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 内核 ux-v36：面板直接添加任意 OpenAI 兼容路由（2026-11-21）
+
+用户提问原话：*「假如别人下载我这个插件之后，能在插件界面直接添加不同路由渠道吗，不能的话请你添加入口，我这暂时只支持 trae，workbuddy，qoder，codearts，阿里云百炼代金券，或者别的 api 路由」*。
+
+结论：能加**同厂商多实例**（`workbuddy2` / `trae2` / `qoder3`），但**加不了任意 API 路由**——`CHANNEL_KINDS` 是闭集、`channelOf()` 对未知 kind 返回 `undefined`（于是 `allChannels()` 把它滤掉、面板连行都不显示）。本轮补的正是这条缺口，新增第 5 种 kind：`custom`。
+
+### 变更
+
+- **注册表**（`lib/channel-registry.js`）：`CHANNEL_KINDS` 增 `custom: { multi: true }`（故意不给 `idPattern`，id 只受 `ID_PATTERN` 约束）；新增 `normalizeCustomBaseUrl` / `normalizeCustomApiPath` / `normalizeCustomModels` / `normalizeCustomKeyHint` 四个归一化助手，`normalizeEntry` 对 custom 强制要求合法 `baseUrl`（缺则整条丢弃）并把四个字段放行——否则读回即丢；`channelOf()` 增 custom 支，输出 `localOnly: true`、空 `statusPath`/`checkinPath`、`credentialHint: connect-auth/<id>.key`；本地 `resolveDshHome()` 改成 export，让 provider 侧与面板侧用同一处路径推导。
+- **面板**（`lib/panel.js`）：`authTargets()` 增 custom 支（密钥落 `connect-auth/<id>.key`）；`KIND_ADAPTERS` 显式登记 custom（不登记会借到 workbuddy 适配器去 POST 不存在的签到路由）；新增 `probeCustomChannel()` 本地合成状态（`signed-in` / `signed-out`，account 显示 `自定义 · <host>`），`probeChannel()` 首行短路——必须在 `fetchRoute` 之前，否则会请求空 `statusPath` 打到自己；`create` 分支校 `baseUrl`（400 `bad-base-url`）与 `models`（400 `empty-models`）并落四个自定义字段；凭据写入增 custom 分支，**放在 `pt-` 校验之前**，不做形状校验；`claimOne()` 对 custom 直接返回 `unsupported`（自定义路由没有签到）。
+- **池路由**（新增 `lib/providers/pool/custom-routes.js`）：`createCustomRoute()` 把一条注册表条目变成池路由（`key`/`providerId`/`channelId` 都是条目 id、`chatUrl() = baseUrl + apiPath`、`token()` 走三级读取、`models()` 按条目里的 id 列表原样输出、`hidden()` 接 `disabledChannels`/`disabledModels`）；`registerCustomRoutes()` 在 `start()` 里逐条试读 key，读不到就跳过并 warn；`refreshCustomModels()` 实现面板的「更新模型」（GET `<baseUrl>/models` → `normalizeCustomModels` → 写回注册表，幂等不重复写盘）。**刻意不声明 `credits()`**：上游没有余额接口时不编假 0。
+- **白名单旁路**（`lib/shared/pool.js`）：`mergedModelGroups()` 的丢弃点原本是 `if (!c) continue;`，会让自定义模型**全部静默消失**（自定义 id 当然不在 `CURATED_MODELS` 里）。改成：本组含 `kind: "custom"` 的候选时补一条合成 curated 条目（`tier: 5`、`index: group.order`、`synthetic: true`）并继续——比较器会读 `pa.c.tier`，没有合成条目会抛；**不改写 `group.poolId`**（改写会让请求打到不存在的模型名）。
+- **挂载**（`lib/providers/pool/index.js`）：`start()` 里七牛之后、`createPoolAdapter` 之前调用 `registerCustomRoutes()`，release 推进 `disposers` 随热重载回收；整段包 try/catch —— 自定义路由出错不连累内置渠道。
+- **刷新模型**（`lib/index.js`）：`refreshChannel()` 在「暂不支持更新」兜底之前加 custom 支，转调 `refreshCustomModels()`。
+- **前端**（`lib/client.js`）：添加表单的类型下拉加第 4 项；custom 时展开「上游地址 / 请求路径 / 模型清单」三输入 + 一行说明；提交按钮的禁用条件抽成 `customFormBlocked`（custom 必须填 `baseUrl` 与 `models`）；中英各补 9 个 i18n 键。
+- **内核标记**：`patch` 从 `ux-v33` 升到 `ux-v36`。
+
+### 自检
+
+- `npm run check` 全绿（check-all / check-imports / check-pool-core / check-hardening / check-qoder-vault），含本轮新增的 12 条 ux-v36 回归闸：注册表认 custom、baseUrl 归一化在位、缺 baseUrl 丢弃、`channelOf` 有 custom 支、探活走本地合成、`createCustomRoute` 在位、`refreshCustomModels` 在位、`start()` 真调用装载、release 回收、白名单旁路与合成 curated 条目——少任何一环都表现为「表单能填、模型不出现」。
+- 端到端冒烟（临时 `DSH_HOME` + 手写注册表，跑完即删）：`chatUrl` / `token` / `models` 全部符合预期；**白名单旁路实证**——`gpt-4o-mini`、`deepseek-chat` 这两个不在 `CURATED_MODELS` 的 id 都出现在了 `mergedModelGroups()` 里，`orderedRoutesFor('gpt-4o-mini')` 能选到这条路由，`release()` 后分组干净消失。
+- 「更新模型」用本地假上游验证：无 key → 提示先粘贴；有 key → `added: ["local-b", "local-c"], count: 3` 并真写回注册表；再点一次 `added: []`（幂等不重复写盘）；错 key → `上游 ... 回 HTTP 401（该线路可能没有 /models，模型清单可以手填）`。
+- 隐藏链路验证：`disabledChannels: ["local"]` → 分组为 `[]`；`disabledModels: ["local/local-b"]` → `hidden()` 返回 `["local-b"]`、分组只剩 `local-a` / `local-c`。
+- 仍无真机渲染截图：面板表单的实际观感需在本机 DSH 里看一眼。
+
 ## 内核 ux-v35：签到补领到账修正（2026-11-21）
 
 修「点了签到却不到账」：Qoder 活动窗口未到（每日约 10:00 才放签到福利）时，旧逻辑把 `showCampaign=true` 误判成 `done`，面板显示已签却不加分；Trae 上游偶发「参与用户太多」失败后没有重试。本版只动面板调度与 Qoder provider 判定，池内核状态机 `lib/shared/pool.js` 仍未改动。
