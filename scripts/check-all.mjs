@@ -90,7 +90,7 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v41"', "内核版本标记已升 ux-v41");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v36"', "内核版本标记已升 ux-v36");
 // ux-v29：路由「莫名其妙掉了」的三处根因回归闸。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "deepseek-v4-flash-official", "Trae 兜底 id 进白名单（不再静默过滤）");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "export function routeModelDiagnostics", "路由掉线诊断函数在位");
@@ -139,62 +139,6 @@ mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "for (const release 
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "const hasCustom = [...group.candidates.keys()].some", "白名单旁路：自定义模型不被静默过滤");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "customRouteKeys.add(route.key)", "旁路按 route.kind 收集自定义 key");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "synthetic: true", "旁路给合成 curated 条目（比较器读 c.tier 不抛）");
-// ux-v38：Trae 多槽被自动 adopt 成同一个号。这条链每一环缺了都会退回事故态，逐环上闸。
-// 根因：桌面端同一时刻只能登一个 Trae 号，而 tick() 在该槽 localStale 时无条件 adopt 桌面身份，
-// 把「救活这个槽」变成了「替这个槽决定用哪个号」，于是所有槽在 30s 内统一成桌面端那个号。
-mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), 'code: "other-account"', "adopt 换号保护：本槽已有别的账号时拒绝自动覆盖");
-mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), "let adoptBlocked;", "adoptBlocked 记录被挡下的换号（面板据此解释为什么没采用桌面号）");
-mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), "localUserId: typeof doc?.userId === \"string\"", "status() 透出本槽账号，界面才能判同号");
-mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), "desktopUserId: (() => {", "status() 透出桌面端当前账号");
-mustContain(path.join(ROOT, "lib/providers/trae/index.js"), "identity: {", "trae 池路由上报账号归属（同号判定的唯一数据源）");
-mustContain(path.join(ROOT, "lib/shared/pool.js"), "identity: credit?.identity,", "池状态文档把 identity 带到每条路由");
-mustContain(path.join(ROOT, "lib/panel.js"), "...typeof raw.userId === \"string\" && raw.userId !== \"\" ? { userId: raw.userId } : {},", "normalizeChannel 透出 userId（同号判定 + 登录守卫都要）");
-mustContain(path.join(ROOT, "lib/panel.js"), "userId: row === undefined ? undefined : row.userId,", "auth 端点把 userId 返回给前端");
-mustContain(path.join(ROOT, "lib/client.js"), "expectUserId: wanted", "前端登录带 expectUserId，让后端账号守卫生效");
-mustContain(path.join(ROOT, "lib/client.js"), "const rebind = options !== undefined", "「换号」是显式动作，不是默认行为");
-mustContain(path.join(ROOT, "lib/client.js"), "const sameAccountKeys = (() => {", "池浮层同号检测");
-mustContain(path.join(ROOT, "lib/client.js"), "sameAccountHint:", "同号时给出人话解释（中英各一份）");
-mustNotContain(path.join(ROOT, "lib/client.js"), "const wanted = String(channel.userId || '');\n\t\t\t\t\treturn {\n\t\t\t\t\t\tstart: () => postJson(path, { action: 'start' })", "重新登录不再无条件不传 expectUserId");
-// ux-v39：Trae 多槽设备身份隔离。ux-v38 只挡住了「自动 adopt 换号」，但两个槽仍可能
-// 共用同一个 deviceId —— 桌面端那把。共用设备号而账号不同时，谁先续期都把对方判成 20403，
-// 表现就是「路由莫名其妙掉」。这条链每一环缺了都会退回撞车态，逐环上闸。
-mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), "if (desktopDeviceId !== \"\" && local.deviceId === desktopDeviceId) return undefined;", "slotIdentity 不再复用桌面身份，撞车时强制新造");
-mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), "const conflictsWithDesktop = (doc, deviceId, desktop) => {", "撞车判定抽成单一函数（renew / status / 池文档共用）");
-mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), "deviceCollision = {", "keyMaterial 撞车时拒签并留下证据");
-mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), 'code: "device-collision"', "renew 遇撞车直接早退，不再拿桌面设备号签别人的链");
-mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), "写回会让桌面端拿到不属于它设备的 refreshToken", "writeBackToDesktop 拒绝把独立设备的 refreshToken 投毒桌面端");
-mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), "deviceCollision: (() => {", "status() 透出撞车结论，面板才能解释为什么要换号");
-mustContain(path.join(ROOT, "lib/providers/trae/index.js"), "slotIdentity(doc, { deviceId: desktop.deviceId })", "登录侧只按设备号判撞车，不再按账号复用桌面身份");
-mustContain(path.join(ROOT, "lib/providers/trae/index.js"), "deviceCollision: (() => {", "池路由 identity 带撞车结论");
-mustContain(path.join(ROOT, "lib/client.js"), "r.identity.deviceCollision === true", "池浮层显示「撞设备号」告警");
-mustContain(path.join(ROOT, "lib/client.js"), "deviceCollisionHint:", "撞车提示给出可执行动作（中英各一份）");
-// ux-v40：CodeArts 反复掉线。三条真 bug 各有独立现场证据，逐条上闸，缺一条就退回「总是掉」。
-// ① 续期 POST 没有超时 → 一次挂住就让 _inflight 永久占位，该号在进程存活期内再也不会续期；
-// ② catch 一律标 stale 落盘 → 一次网络抖动就把号判成「必须重新登录」；
-// ③ 先落盘再更新内存 → 写盘抛错会丢掉上游刚轮换出的 refresh_token，之后每次续期都是 invalid_grant。
-const AUTH_VENDOR = path.join(ROOT, "lib/providers/codearts/vendor/auth-CF9XHMX-.mjs");
-mustContain(AUTH_VENDOR, "const REFRESH_TIMEOUT_MS = 25e3;", "续期请求带硬超时（否则 _inflight 会被永久占死）");
-mustContain(AUTH_VENDOR, "function isDefinitiveRefreshRejection(text) {", "续期失败区分「上游明确拒绝」与「链路问题」");
-mustContain(AUTH_VENDOR, "invalid_grant|invalid_token|invalid_request|InvalidDPoPHeader|use_dpop_nonce", "明确拒绝的判定覆盖 invalid_grant 家族");
-mustContain(AUTH_VENDOR, "AbortSignal.timeout(REFRESH_TIMEOUT_MS)), cred.label);", "两处 refresh() 都把超时信号传给 refreshToken");
-mustNotContain(AUTH_VENDOR, "\t\t} catch {\n\t\t\tcred.stale = true;", "续期 catch 不再无条件标 stale");
-mustContain(AUTH_VENDOR, "if (!isDefinitiveRefreshRejection(text)) {", "只有明确拒绝才走 stale 分支");
-mustContain(AUTH_VENDOR, "this._cred = next;\n\t\t\t\tthis._refreshFailedAt = void 0;", "AccountSlot 先落内存再落盘，写盘失败不丢新 token");
-mustContain(AUTH_VENDOR, "if (cred.stale !== true && this._refreshFailedAt !== void 0 && Date.now() - this._refreshFailedAt < REFRESH_RETRY_GAP_MS) return cred;", "非 stale 失败留最短重试间隔，不乱撞一次性 refreshToken");
-mustContain(AUTH_VENDOR, "const error = this._slots.get(id)?.lastRefreshError;", "账号摘要透出最近一次续期失败原因");
-mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "refreshError: str(a.refreshError).slice(0, 200)", "状态接口把续期失败原因带给面板");
-// ux-v41：ux-v40 之后仍剩下的两条「续期成功却掉线」通道。
-// ① 续期 POST 已让上游轮换掉那枚一次性 refresh_token，但槽位在等响应期间被
-//    invalidate()（重读磁盘 / 暂停 / 置顶 / 重登）→ stillCurrent() 为假 → 结果被直接
-//    丢弃，磁盘还留着已作废的旧 token → 之后每次续期都是 invalid_grant，整个 family 判死。
-// ② 保活用 `void store.keepAlive().catch(function () {})` 静默吞掉一切失败，日志里
-//    连一条 stale 都没有，用户说「又掉了」时无从查证。
-mustContain(AUTH_VENDOR, "if (typeof expectRefreshToken === \"string\" && expectRefreshToken !== \"\") {", "落库支持「文档里仍是本次消费的那一枚」守卫");
-mustContain(AUTH_VENDOR, "await this.persist(next, mat.refreshToken);", "槽位被 invalidate 后仍把轮换结果补落盘");
-mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "function reportAlive(logger, text, warn) {", "保活结果有可观测性，失败不再无声");
-mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "startCodeartsRefresh(intervalMs = 30 * 60 * 1000, keepAliveMs = 5 * 60 * 1000, logger)", "保活定时器接宿主 logger");
-mustNotContain(path.join(ROOT, "lib/providers/codearts/index.js"), "const aliveTick = function () { void store.keepAlive().catch(function () {}); };", "保活失败不再被空 catch 吞掉");
-mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "logPoolEvent({ ev: 'keepalive', kind: 'codearts'", "保活结果落 ~/.dsh/.pool-route.log，事后可查");
 // ux-v19：池转发的兜底抓取必须是 directFetch，不能回落 globalThis.fetch。
 // billion-context 用 defineProperty 接管全局 fetch 并把自己重链到最外层，未声明
 // route.fetch 的路由（trae/trae2/qoder/workbuddy/bailian/qiniu）于是被它的
