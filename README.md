@@ -1,27 +1,37 @@
 # 驼峰积分池 · dsh-camel-pool
 
-**从「渠道中心」(`dsh-connect`) 整包独立出来的单独插件。** 自带积分池剩余额度显示面板、自动签到、多渠道聚合模型下拉。后续可以继续往池子里添加更多渠道来扩充模型选择，不再依赖 `dsh-workbuddy-trae-qoder-connect`。
+**驼峰积分池**是 DSH 的积分池插件：把 WorkBuddy、Qoder、Trae、CodeArts 等多平台的免费额度与积分汇聚成一个统一的「能量池」——一个面板看余额、一次签到领当天积分、一个下拉选全部模型；调用时自动挑最划算、最快过期的路由。
 
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> **English** — A standalone DSH plugin forked out of the Connect Hub. It keeps the pooled-credit panel, automatic daily check-in and the multi-channel model picker, and can grow with more pool routes. It no longer depends on `dsh-workbuddy-trae-qoder-connect`.
+> **English** — Camel Pool is a DSH plugin that gathers free credits from WorkBuddy, Qoder, Trae and CodeArts into one pool: a unified balance panel, one-click daily check-in with automatic make-up, and a single model picker across all channels. Requests are routed to the cheapest, soonest-expiring channel automatically.
 
 ---
 
-## 为什么独立
+## 名字的来历
 
-原先积分池内核（`lib/providers/pool/**` + `lib/shared/pool.js`）寄居在 `dsh-connect` 包里。上游渠道中心一更新，就会把池内核整片覆盖掉（2026-11-07 的事故根因）。本包做法是**路线 B：整包 fork**——
+「驼峰」取意于骆驼的驼峰——骆驼把能量储存在驼峰里，穿越沙漠时再一点点取用。这个插件做的是同一件事：
 
-- 池内核状态机 `lib/shared/pool.js`（注册表 / credits / latches / breakers / 排序）**一字未动**，与旧包完全同源；`lib/providers/**` 只有 `pool/index.js` 的状态快照 handler 加了一处「现读偏好注入 `active` / `pool.order`」的文档投影（修 8.4 第 6/7 项，见下），不触碰任何状态机逻辑；
-- 用量账本 `lib/shared/usage.js` 的记账口径于 ux-v34 修正：CodeArts 余额含赠包/当日到期包，套餐重置会被余额差推算虚记成消耗，故该渠道改为只认上游直接上报的 credits，并对历史账本做一次性收敛迁移。此项只动 `usage.js`（非 pool.js），池内核「一字未动」承诺不受影响；
-- 旧的 `dsh-connect` 在 profile 层 `disabled: true`，由本包独占所有路由与面板；
-- 包标识全面改成 `dsh-camel-pool`（npm 名、运行时插件 id、`HUB_SETTINGS_NS`、客户端 module-loader id、settings 命名空间）；
-- 签到补领队列（ux-v35）：`lib/panel.js` 新增 `.dsh-checkin-retry.json` 持久化队列与后台扫描；Qoder 活动窗口未到（每日约 10:00 开放）／Trae 上游失败时排队到点自动补领，确保「点了签到积分到账」。此项只动面板调度与 Qoder provider 判定，不改 `shared/pool.js`，池内核「一字未动」承诺不受影响；
-- 上游渠道中心以后再更新，也碰不到本包里的池内核。
+- 把散落在多个平台、会过期、会重置的免费积分与额度「存」进一个池子；
+- 模型调用时像骆驼消耗驼峰一样按需取用，优先烧当天就过期的部分（见「当日额度优先」）；
+- 一个池子统一对外，调用方不必关心背后是哪几家渠道、哪条路由。
 
-因此「脱离渠道中心成为单独插件」是天然的：本包自己就是一个完整插件，同时承载三家渠道 + 积分池 + 面板 + 自动签到。
+`dsh-camel-pool` 即「DSH 的驼峰（camel）积分池」；`camel` 也呼应 camelCase 的写法，插件 id、npm 名、settings 命名空间统一用它。
 
-**保留的路由前缀**（最小改动，旧插件已禁用，无冲突）：
+---
+
+## 主要功能与重点
+
+- **统一额度面板**：侧栏常驻「驼峰积分池」入口，大字显示总积分，逐条路由列出剩余额度、即将过期量、优先级、代金券与额度占比条，套餐明细默认折叠、可搜索展开（详见下一节「你会得到什么」）。
+- **自动签到 + 补领到账**：打开面板时幂等领取当天可领积分；Qoder 活动窗口未到（约每日 10:00 开放）或 Trae 上游失败时，持久化队列会在到点后自动补领，确保「点了签到，积分到账」（ux-v35）。
+- **多渠道模型下拉**：WorkBuddy（多槽位）、Qoder CN、Trae CN 与积分池自身的白名单模型合进一个列表，按渠道分组、标积分倍率，中途换渠道历史不断。
+- **智能池调度**：按剩余额度挑路由，402/429 自动熔断换线；当日即将过期的额度优先烧，粘性让位给当日桶；真实请求只记 token 长度、不含凭据。
+- **用量账本**：记录每日请求与消耗；CodeArts 这类余额含赠包/当日到期包的渠道只认上游直接上报的消耗，避免套餐重置被误记成巨额虚高（ux-v34）。
+- **即时可配**：`autoCheckin`、额度/券优先、隐藏或禁用渠道与模型、低额度自动提推理档位等均可在设置里切换、即时生效（见「配置」一节）。
+
+---
+
+**对外路由**（均为 loopback 回环端点，仅本机可访问）：
 
 | 端点 | 用途 |
 |---|---|
@@ -38,7 +48,7 @@
 
 ## 你会得到什么
 
-**独立的积分池剩余额度面板（本包新增，UX v2）。** 侧栏常驻一个「驼峰积分池」入口（`sidebar.footer.action`，`order: 21`），按钮上带状态点与额度摘要，点开是自己的浮层面板，独立于渠道中心面板：
+**积分池剩余额度面板（UX v2）。** 侧栏常驻一个「驼峰积分池」入口（`sidebar.footer.action`，`order: 21`），按钮上带状态点与额度摘要，点开是自己的浮层面板：
 
 - 大字显示 `credits.total`（例如 `9,318.21`）；`role="status" aria-live="polite"` 状态条区分「刷新中 / 已更新 / 数据过期 / 请求失败（带重试）」，绝对时间 + 相对时间（`justNow` / `secondsAgo`）；
 - 每条池路由各自的 `remaining`、`expiring`、`priority`、`voucher`、额度占比条，低额度（`<500`）、探测失败、代金券、熔断分别打标记；
@@ -63,7 +73,7 @@
 
 自检（离线实证，不依赖浏览器插件）：`node _tools/verify-ux.mjs` → 62/62 PASS（静态契约 25 项 + 真实渲染组件 37 项，含共享单请求、dialog/portal、折叠、复制换行、一键签到 POST、开关 POST）；`node _tools/final-delivery-check.mjs` → 50/50；`node _tools/verify-client-registration.mjs` → 19/19。三者结果分别写入 `_tools/verify-ux.out.txt`、`_tools/final-delivery-check.out.txt`、`_tools/verify-client-registration.out.txt`。
 
-**自动签到。** 沿用原机制：客户端所有 `useHubStatus()` 调用统一带 `?auto=1`（`lib/client.js` 的 `fetch(\`${STATUS_PATH}?auto=1\`)`），宿主 `lib/panel.js` 的 status handler 判 `prefsNow.autoCheckin === true && url.includes("auto=1")`，在扇出 `probeAll(..., { autoCheckin: auto })` 时顺带幂等领取当天可领积分。**没有额外定时器**，重复打开只领一次、不重复扣分。偏好项 `autoCheckin` 默认 `true`，可在设置里关掉（新额度面板的开关也写这个键）。新额度面板**刻意不触发第二次 `?auto=1`**，只读 `/plugins/dsh-pool/status`（首屏不带 refresh，打开弹窗时补一次 `?refresh=1`），避免并发重复 claim。
+**自动签到。** 客户端所有 `useHubStatus()` 调用统一带 `?auto=1`（`lib/client.js` 的 `fetch(\`${STATUS_PATH}?auto=1\`)`），宿主 `lib/panel.js` 的 status handler 判 `prefsNow.autoCheckin === true && url.includes("auto=1")`，在扇出 `probeAll(..., { autoCheckin: auto })` 时顺带幂等领取当天可领积分。**没有额外定时器**，重复打开只领一次、不重复扣分。偏好项 `autoCheckin` 默认 `true`，可在设置里关掉（新额度面板的开关也写这个键）。新额度面板**刻意不触发第二次 `?auto=1`**，只读 `/plugins/dsh-pool/status`（首屏不带 refresh，打开弹窗时补一次 `?refresh=1`），避免并发重复 claim。
 
 **一个下拉装下三家 + 池。** WorkBuddy（国区/国际版多槽位）、Qoder CN、Trae CN 的免费额度合进一个模型列表，按渠道分组旁标积分倍率；`dsh-pool` 作为独立一组出现，含 `hy4flash-free` 等 26 个白名单模型（CodeArts 5 个与老渠道同 id 的自动合并成一条；Gemini 6 个已于 ux-v22 整组移出，不再进池）。模型数以 `GET /plugins/dsh-pool/status` 的 `models` 实测为准，README 不再硬写条数。中途换渠道历史不断。三家协议（OpenAI 方言 / 私有 agent 协议 / 自定义编码流）由本包在中间翻译。
 
@@ -101,7 +111,7 @@ CodeArts 的每日签到 100 积分**当天 24:00 过期**，过期即归零。�
 | `poolAutoBoostEffort` | `false` | 低额度时自动把推理档位提到 `xhigh` |
 | `poolBurnExpiringFirst` | `true` | 当日即将过期的额度优先烧（见「当日额度优先」一节） |
 
-`poolEnabled`、`poolVoucherFirst`、`poolMergeModels`、`poolCostFirst`、`poolShowRoutes`、`poolAutoBoostEffort`、`poolBurnExpiringFirst` 都是 `.volatile()` 字段，切换即时生效、不落盘。改模型/渠道相关键会触发 `deps.onModelsChanged?.()` → `ctx.emit("llm/adapters-updated")`。写入走白名单（`lib/panel.js` 的 settings handler），不在表里的键一律丢弃。设置写入走 `settingsApi.update(HUB_SETTINGS_NS, patch)`，`HUB_SETTINGS_NS` 已改成 `dsh-camel-pool`，与 profile 条目 id 同源，否则会报 `No configurable plugin entry "dsh-connect"`。
+`poolEnabled`、`poolVoucherFirst`、`poolMergeModels`、`poolCostFirst`、`poolShowRoutes`、`poolAutoBoostEffort`、`poolBurnExpiringFirst` 都是 `.volatile()` 字段，切换即时生效、不落盘。改模型/渠道相关键会触发 `deps.onModelsChanged?.()` → `ctx.emit("llm/adapters-updated")`。写入走白名单（`lib/panel.js` 的 settings handler），不在表里的键一律丢弃。设置写入走 `settingsApi.update(HUB_SETTINGS_NS, patch)`，`HUB_SETTINGS_NS` 为 `dsh-camel-pool`，与 profile 条目 id 同源，否则会报 `No configurable plugin entry "dsh-connect"`。
 
 ---
 
@@ -109,7 +119,7 @@ CodeArts 的每日签到 100 积分**当天 24:00 过期**，过期即归零。�
 
 第 7 条 `registerPoolRoute`，详见 [lib/providers/codearts/README.md](lib/providers/codearts/README.md)。要点：
 
-- **不是** fork 市场插件 `dsh-codearts`、不是独立 shim、不是独立 provider / 独立面板；
+- **内置**协议引擎，不依赖市场插件 `dsh-codearts`、不另起 shim / provider / 面板；
   协议引擎放 `lib/providers/codearts/vendor/`（4 个实测构建产物），`engine.js` 重导出可读名，
   `index.js` 只做池契约 + 状态挂载 + 4 条 loopback 路由。
 - `route.fetch` 对池清洗后的最终 `init.body` 做 `prepareChatBody` 白名单重建，再交给
