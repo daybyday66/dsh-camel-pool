@@ -236,7 +236,7 @@ async function main() {
   if (remoteSha === headSha) { note("远端已是最新：" + headSha.slice(0, 8)); return; }
 
   let known = false;
-  try { git(["cat-file", "-e", remoteSha + "^{commit}"]); known = true; } catch { known = false; }
+  try { git(["cat-file", "-e", remoteSha + "^{commit}"], { stdio: ["pipe", "pipe", "pipe"] }); known = true; } catch { known = false; }
   if (!known) {
     // 本地没有远端最新提交（别处推过 / 远端被强推）：重建整条历史既慢又会在根提交上崩，
     // 直接把 HEAD 的树 graft 到远端 HEAD 上，只上传有差异的 blob。
