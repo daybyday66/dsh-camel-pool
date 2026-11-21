@@ -3,6 +3,313 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 内核 ux-v35：签到补领到账修正（2026-11-21）
+
+修「点了签到却不到账」：Qoder 活动窗口未到（每日约 10:00 才放签到福利）时，旧逻辑把 `showCampaign=true` 误判成 `done`，面板显示已签却不加分；Trae 上游偶发「参与用户太多」失败后没有重试。本版只动面板调度与 Qoder provider 判定，池内核状态机 `lib/shared/pool.js` 仍未改动。
+
+### 变更
+
+- **判定**：Qoder `claimCampaign()` 仅在 `claimedToday` 时返回 `already-claimed`；无可领奖励且窗口未到时返回 `pending` + `retryAt`（当天 10:05 或未来 CLAIM_BENEFIT 活动开始 +1 分钟），不再假报成功。面板 `checkinOf()` 同样只认 `claimedToday` 为 `done`，`showCampaign` 但不可领改为「待补领」提示。
+- **补领队列**：`lib/panel.js` 新增持久化队列 `.dsh-checkin-retry.json`（仅 qoder / trae，原子写、0600、保留 7 天），记录当天成功 / 待重试状态。
+- **后台扫描**：`registerPanel()` 内启动 15s 首次 + 20min 周期扫描，尊重 `autoCheckin` 与 `disabledChannels`，对到期队列 POST 各自 `checkinPath` 重试；Trae 失败 20min 后重试，Qoder 到点后重试；面板卸载时清理定时器。
+- **端口兜底**：后台 sweep 无 req 上下文，原 `loopbackBaseFallback()` 只读 env、缺 `DSH_PORT` 时写死 3079 会打空；改为记录最近一次真实请求解析出的回环基址 `lastKnownBase`（由 `fanoutBaseOf(req)` 喂入），后台任务复用与 GUI 一致的正确端口。
+- **归一化**：`normalizeClaim()` 把 `pending/retryable` 映射成 `unsupported` + 说明文案，一键签到不再把「窗口未开」算成失败。
+
+### 自检
+
+- `node --check lib/panel.js lib/providers/qoder/index.js` 通过；`npm run check` 全绿。
+- 热重载后 `GET /plugins/dsh-qoder-connect/1/status` 的 checkin 带 `retryable/retryAt`；到点后台 sweep 自动补领，积分到账。
+
+## 内核 ux-v34：用量记账口径修正（2026-11-21）
+
+修用量页「累计积分消耗」虚高（实测显示 11 万+，真实消费约几百）。纯记账口径修正，池内核状态机 `lib/shared/pool.js` 仍未改动。
+
+### 变更
+
+- **根因**：`lib/shared/usage.js` 的 `noteCreditObservation()` 把每次余额下降都记成消耗。CodeArts 余额口径 `usageTotalPackageCredit.package_credit_remain` 含赠送包与当日到期包，套餐周期重置 / 赠包过期会被 20s 高频采样拆成无数小于 `MAX_CREDIT_DELTA`（10000）的小下降，绕过单次护栏后被不断累加（零请求日也记 1.5 万～3.5 万）。
+- **治本**：CodeArts（routeKey `codearts` / meta.kind `codearts`）不再按余额差记账，只认上游 usage 事件直接上报的 `directCredits`；其余渠道余额差推算保持不变。
+- **一次性账本迁移**：`ensureLoaded()` 里把 codearts 每天 platform.credits 收敛到 directCredits，`meta.__usageV2Migrated` 幂等标记，抹掉历史虚高而不动 token / 请求数 / 其它平台。
+- **面板**：zh/en `usageNote` 改成自解释文案；累计消耗远超当前额度时，用量页顶部挂醒目提示，说明含非消费性余额变动、仅供参考。
+
+### 自检
+
+- `npm run check`、`node --check` 均通过；热重载后 `GET /plugins/dsh-connect/usage` 累计 credits 回落，`/plugins/dsh-pool/status` patch 保持兼容。
+
+## 内核 ux-v33：面板显示优化（2026-11-20）
+
+只改 `lib/client.js`（纯展示层），池内核、路由、调度一行未动。
+
+### 变更
+
+- **`unlimitedQuota` 文案泄漏**：`unlimitedQuota: '不限额'` 只存在于 WorkBuddy
+  卡片的文案表里，积分池面板自己的 zh/en 表没有这个 key，`safeT` 查不到就原样
+  返回，七牛行绿标上印着 `unlimitedQuota`。在面板自己的两张表里各补一行。
+- **概览路由行**：数字拼总额（「余 1,838 / 2,000」，有总额时）；进度条改按本路由
+  余/总额算，总额未知时退回按最大路由相对算；七牛行「余 —」改成「不限额」。
+- **用量页百分比**：旧文案把「占总请求比」跟在 fail 后写成 `(94%)`，Trae
+  12 请求全失败也显示 `(1%)`。改成成功率 + 明确标注的占比，fail>0 标红。
+- **用量页零活动平台**：默认折叠（Gemini Pro 历史残留行、Qoder、七牛等），
+  底部「显示空闲平台 (N)」按钮可展开。
+- **趋势图**：图下补起止日期一行。
+- **套餐明细聚合**：同渠道同名套餐按 (route, packageName) 合并，余额/总额求和、
+  行上挂 ×N、到期取最早；标题与「展开全部」计数改成组数。
+
+### 自检
+
+- `npm run check` 全绿，含新增静态断言；`node --check` 过 `lib/client.js`。
+- 仍无真机联调：面板实际渲染需在本机 DSH 里看截图确认。
+
+
+## 内核 ux-v32：DeepSeek 第三轮审计——七牛两处 P1 + 归一化 P0 残留（2026-11-20）
+
+### 变更
+
+- **P0 残留：归一化展开进 try**（`lib/shared/pool.js`）：`[...models]` 与
+  `route.models()` 调用包进同一个 try。ux-v31 只兜住了调用，迭代器中途抛错 /
+  立即抛错 / `Symbol.iterator` 的 getter 抛错三种都照样打穿 status。
+- **P1-1：顶部总额不再和七牛行自相矛盾**（`lib/client.js`）：`emptyCredits`
+  加 `hasSynthetic` 旁路；只剩 synthetic 路由且总额为 0 时顶部显示「不限额」
+  而不是「不可用 / 探测中」。旧逻辑是 ux-v29 就有的，ux-v31 把七牛行放进首屏
+  后才第一次被用户看见。
+- **P1-2：七牛有 key 才注册**（`lib/providers/pool/index.js` / `routes-builtin.js`）：
+  注册从 `apply()` 同步段移到 `start()` 里，先读一次 key，空或抛错都跳过，
+  配好后重启 DSH；release 进 `disposers` 随热重载回收。纵深防御：
+  `qiniuRoute().credits()` 先 `await readKey()`，没 key 就抛错，
+  `refreshOneRoute` 记 error + signedOut（旧数据可保留时记 stale + error）。
+- **无路由文案**（`lib/client.js`）：`routesSecEmpty` 一条路由都没有时显示
+  「暂无路由」而不是永远「加载中」（中英双语文案 `noRoutes`）。
+- **文档补齐**：`docs/` 补写 ux-v30 报告（当时只写了 CHANGELOG），本轮新增
+  ux-v32 报告；四份报告齐了。
+
+### 自检
+
+- `npm run check` 全绿，含新增断言：归一化展开在 try 里、synthetic 旁路在位、
+  `noRoutes` 文案在位、七牛注册有 key 门、credits() 没 key 抛错；
+  `check-pool-core` 新增「抛错的迭代器不打挂整池」三项运行时断言（中途抛 /
+  getter 抛 / 立即抛，诊断均记 0 条）。
+- 仍无真机联调：需挂真实 Trae 号跑一轮 402/429 切换确认；七牛有/无 key 两种
+  机器也需各跑一轮启动，确认路由出现与不出现都符合预期。
+
+### 已知未决
+
+- `dfmodel` 仍是死 alias，目标 id 不在白名单里；`hiddenModelCount` 进了 status
+  但面板仍不展示（诊断字段，可接受）。
+
+
+## 内核 ux-v31：DeepSeek 第二轮审计——P0 回归 + 活路由看不见补齐（2026-11-20）
+
+### 变更
+
+- **P0：脏路由不再打挂整池**（`lib/shared/pool.js`）：`models()` 返回值先归一化
+  成数组再算诊断与分组（数组原样、可迭代展开、字符串与普通对象当空）。ux-v30
+  在 `try/catch` 之外裸调 `models.filter()`，一条路由回 `Set` / 字符串就
+  `TypeError`，打穿 `mergedModelGroups()` 与 `poolStatusDocument()`（status 500、
+  面板全空）。`rawModelCount` 改成归一化后的长度（`Set` 没有 `length`）。
+- **七牛首屏可见**（`lib/client.js`）：折叠谓词补 `syntheticBalance === true`；
+  行上挂「不限额」标签（`unlimitedQuota`，已有文案）。`priority: -1`、每天 00:00
+  重置、最该优先烧的那条路由此前因 `remaining` 为 `undefined` 被折叠掉。
+- **账号区死锁**（`lib/client.js`）：「全部套餐」按钮条件去掉 `positiveCount > 0`。
+  所有套餐归零时旧条件让按钮消失，用户切不回全量，只能等余额回来。
+- **Trae 只在凭据真变时清熔断**（`lib/providers/trae/index.js`）：凭据是
+  `keepalive.tick()` 返回 `renewed` / `adopted`，或 token 指纹（内存内哈希，
+  不存 token、不记日志）变了，才调 `clearBreakers`。同条 token 每 30 秒巡检
+  不再清 auth 冷却。未采用审计的「只看 userId」方案：同一账号续期/重登时
+  userId 不变，那样会把 ux-v29 修的问题带回来。
+- **`hiddenModelCount` 透出**（`lib/shared/pool.js` / `README.md`）：status 路由
+  条目补上该字段，不再是只写不读的死字段。
+
+### 自检
+
+- `npm run check` 全绿，含新增断言：归一化在位、hidden 透出、synthetic 放行、
+  账号按钮条件、tick 结果判据；`check-pool-core` 新增「非数组 `models()` 不抛
+  且诊断条数合理（Set 展开 1 条、字符串/对象当空）」「`droppedModels` 上限 8 条」
+  「`hiddenModelCount` 计入被 `hidden()` 滤掉的模型」三项运行时断言。
+- 仍无真机联调：需挂真实 Trae 号跑一轮 402/429 切换确认。
+
+### 已知未决
+
+- v27/v28 仍无 CHANGELOG 条目（不补编）；`dfmodel` 仍是死 alias，目标 id 不在
+  白名单里，Qoder 的 `dfmodel` 仍被静默滤掉——没有证据证明它就是 v4.1 那档，
+  猜映射比留着更糟。
+
+
+## 内核 ux-v30：DeepSeek 审计四补丁（2026-11-20）
+
+本条是 DeepSeek V4.1 Flash 对 ux-v29 的逐行审计后打的补丁，四条问题经本机
+逐项核对全部属实，另加它指出的一处误导性别名。
+
+### 变更
+
+- **折叠按钮进去出不来**（`lib/client.js`）：`hiddenRouteCount` 改成与
+  `showAllRoutes` 无关的常量（`routes.length - filteredRoutes.length`）。此前
+  展开后它变 0，按钮直接消失，只能刷新面板。
+- **`route.models()` 调 3 次变 1 次**（`lib/shared/pool.js`）：主循环那次的结果
+  存进 `diagRawIds`，诊断段复用，不再另调两次；`hiddenMatcher` 也只算一遍。
+  注释曾写着“不重复调”，代码正好相反，一并改掉。
+- **注销清诊断**（`lib/shared/pool.js`）：`unregisterPoolRoute()` 补
+  `routeDiagnostics.delete(key)`，长跑不再留幽灵条目。
+- **死代码收尾**（`lib/client.js` / `lib/providers/gemini/oauth.js`）：删掉
+  `.dcp-gq-grid` / `.dcp-gq-box` 两条 CSS；两处 Gemini 登录报错不再指向已删的
+  `scripts/gemini-oauth-login.mjs`，改成说明 Gemini 已于 ux-v22 移出、如需恢复
+  先重新注册路由。
+- **误导性别名**（`lib/shared/pool.js`）：删掉 `ID_ALIASES` 里
+  `deepseek-v4-flash-official → deepseek-v4-flash` 这一行。`deepseek-v4-flash`
+  本身不在白名单里，任何直接请求它都会 402；official id 本身已在白名单，
+  靠 `curatedKeyOf` 从 candidate.id 就能进库，alias 纯属多余。行为无变化，
+  只是不再把两个 id 混成一组。
+  - 另注：`dfmodel → deepseek-v4-flash` 这条 alias 仍指向同一个不在白名单的
+    目标，Qoder 的 `dfmodel` 目前在池里仍是被滤掉的状态；没敢直接把它改指
+    `deepseek-v4.1-flash`，因为没有证据证明 Qoder 的 DeepSeek-Flash 就是
+    v4.1 那档，猜映射比留着更糟，留待有实测再定。
+
+### 自检
+
+- `npm run check` 全绿，含新增断言：折叠计数恒定、注销清诊断、Gemini CSS 与
+  旧提示已删、误导性别名已删；`check-pool-core` 新增「每路由只调一次
+  `models()`」「注销后诊断无幽灵条目」两项运行时断言。
+- 仍无真机联调：12s 探测、清熔断、trae2 目录与本次四补丁都只过了静态断言与
+  `npm run check`，需挂真实 Trae 号跑一轮 402/429 切换确认。
+
+
+## 内核 ux-v29：Trae 路由掉线根因修复 + 面板降噪 + Gemini 死代码清理（2026-11-20）
+
+> 注：代码里的 `patch` 在 ux-v26 之后已升到 ux-v28，但 CHANGELOG 没有 v27/v28 的
+> 条目（文档漂移）。本条只写 v29 实际改动，不补编 v27/v28 的内容。
+
+### 变更
+
+- **Trae 兜底 id 进白名单**（`lib/shared/pool.js`）：`CURATED_MODELS` 23 → 26 条，
+  新增 `deepseek-v4-flash-official` / `deepseek-v4-pro-official` / `minimax-m3`。
+  根因：Trae SOLO 兜底名单 / 快照里的这三个真实 id 不在白名单里，产品误判成 solo
+  或快照缺失时它们会被 `mergedModelGroups()` 静默过滤，表现为「Trae 路由莫名其妙掉了」。
+- **路由掉线可诊断**（`lib/shared/pool.js`）：新增 `routeModelDiagnostics()`，
+  `pool.status` 每条路由透出 `modelCount` / `rawModelCount` / `droppedModels`（最多 8 个）。
+  排查口径见 README「路由掉了怎么查（ux-v29）」。
+- **Trae 首字节探测放宽**（`lib/providers/pool/index.js`）：多路由时 Trae 由 6s 放到 12s，
+  其余路由仍 6s，单路由仍 45s。一次 agent 槽位冷启动慢不再记 60s transport 熔断。
+- **登录/续期成功清熔断**（`lib/providers/trae/index.js`）：浏览器登录落盘后与每轮巡检
+  `store.resolve()` 成功后各调一次 `clearBreakers(instanceId)`——此前一次 auth 失败记的
+  10 分钟冷却会让刚登好的号继续「掉线」10 分钟。
+- **trae2 目录修复**（`lib/index.js`）：trae2 不再读 `trae-cn/models-<id>.json`（导出脚本
+  只写 `trae-cn/models.json`，旧路径永远不存在，trae2 只能读 5 条兜底模型）。同产品目录
+  共用，账号靠各槽自己的 `credentialFile` 区分。
+- **面板降噪**（`lib/client.js`）：删掉 Gemini 死代码（`geminiQuotaSec` / `gqBucket` /
+  18 条 `geminiQuota*` 文案——`doc.geminiQuota` 自 ux-v22 起已不再下发，整块恒为 null）；
+  路由默认只显示有余额 / 报错 / 过期 / 熔断的，其余折叠到「显示全部路由」；套餐明细
+  `hideZero` 默认开（0 余额套餐默认折叠）。第一屏路由行从 9-10 行压到 3-5 行。
+- **瘦身发布包**（`package.json` / `scripts/`）：删掉 25 个一次性 `probe-*.mjs`、
+  `verify-gemini-429*.mjs`、`gemini-oauth-login.mjs`（其中多份 probe 脚本还硬编码了
+  `C:\Users\00\.dsh\gemini-oauth.json` 绝对路径）；`package.json` 的 `files` 显式排除
+  `probe-*` / `verify-gemini-*` / `gemini-oauth-login.mjs`，以后再加 probe 脚本也不会
+  跟着发版。`lib/providers/gemini/**` 本体保留（`verify-uxv10.mjs` 仍在用它做回归）。
+- **版本与文档统一**：`package.json` 1.0.2 → 1.0.3，`patch` ux-v28 → ux-v29；
+  README 里 `routes=10` / `models=29` / 含 Gemini 6 个等已过期数字全部改成以
+  `GET /plugins/dsh-pool/status` 实测为准，备份路径里的用户名绝对路径已删。
+
+### 影响面
+
+- 池模型库 23 → 26 条（只加了 Trae 已有的三个真实 id，不改任何已有模型的路由与排序）。
+- 面板第一屏变短；想看全量路由点「显示全部路由」，想看 0 余额套餐点「全部套餐」。
+- Trae 冷启动慢、重新登录后 10 分钟内仍掉线、trae2 只有 5 个模型这三类症状应消失；
+  若仍出现，先看状态文档的 `droppedModels` / `pool.broken` 再报问题。
+- `npm pack` 不再含 probe 脚本；本地调试 probe 脚本需自行从 git 历史取回。
+
+### 自检
+
+- `npm run check` 全绿（check-all / check-imports / check-pool-core / check-hardening /
+  check-qoder-vault），含新增断言：Trae 兜底 id 进库、诊断字段在位、Trae 探测 12s、
+  登录清熔断、trae2 无旧目录路径、客户端无 `geminiQuotaSec`、路由折叠开关在位。
+- 云端无真实凭据，无法做 DSH 真机联调：见 `docs/OPTIMIZATION-REPORT-ux-v29.md`。
+
+
+## 内核 ux-v22：Gemini 整组移出驼峰池（2026-11-20）
+
+### 变更
+
+- **Gemini 路由摘接线**（`lib/providers/pool/index.js`）：删掉 gemini 模块的 9 个符号与
+  `quota.js` 两个函数的 import、`POOL_GEMINI_OAUTH_PATH` 常量、`registerPoolRoute(geminiRoute(...))`
+  与 `startGeminiModelRefresh(...)`、`ctx.effect` 里的两条清理、转发体里 `kind === "gemini"`
+  的字段删除分支、`POST /plugins/dsh-pool/status` 的本机额度同步桥（`writeGeminiQuota`）、
+  `doc.geminiQuota` / `doc.geminiAuth` 两个状态字段，以及整段 `/plugins/dsh-pool/gemini-oauth`
+  路由（原 start/submit/cancel/status 四动作）。`patch` 由 `ux-v21` 升到 `ux-v22`。
+- **模型白名单**（`lib/shared/pool.js`）：`CURATED_MODELS` 移除 6 条 gemini 条目
+  （gemini-4-argon / gemini-3.1-pro-preview / gemini-3.8-flash / gemini-3.5-flash-lite /
+  gemini-3.5-pro / gemini-3.1-pro-high），`GEMINI_STRENGTH` 强度表与其在 `strengthOf()`
+  里的固定值分支一并删除。白名单 29 → 23 条。
+- **隐藏钩子**（`lib/index.js`）：删除 `import * as gemini`，`HOOKED_PROVIDERS` 由
+  `[[workbuddy], [trae], [qoder], ["codearts", codearts], ["gemini", gemini]]` 收敛为
+  只多带 codearts；面板的 `disabledModels` / `pickerHidden` 规则不再派发给 gemini。
+- `lib/providers/gemini/**` 与 `scripts/gemini-oauth-login.mjs` 文件本身保留（历史快照与
+  离线脚本仍在用），只是不再被注册进池。
+
+### 影响面
+
+- 池里不再有 gemini 候选：`GET /plugins/dsh-pool/status` 的 `models` 由 29 → 23，
+  响应里不再出现 `geminiQuota` / `geminiAuth`；`GET /plugins/dsh-connect/models` 不再列出
+  任何 gemini model id。面板 UI 无需改动 —— `doc.geminiQuota` 缺失时 `lib/client.js` 的
+  `gq` 为 null，整块不渲染。
+- 若以后要把 Gemini 加回来：反向恢复上述四处接线即可，`providers/gemini` 模块的导出面未动。
+
+### 自检
+
+- `scripts/check-all.mjs` 的 `["gemini", gemini]` 断言改为 5 条反向断言：
+  HOOKED_PROVIDERS 不含 gemini、`lib/index.js` 不 import gemini 模块、
+  `lib/providers/pool/index.js` 不含 `geminiRoute(` 与 `gemini-oauth`、
+  `lib/shared/pool.js` 不含 `gemini-4-argon`；`patch` 断言同步升到 `ux-v22`。
+- `npm run check` 全绿（check-all / check-imports / check-pool-core / check-hardening /
+  check-qoder-vault）。
+
+## 内核 ux-v23～v26：Trae 自续期 / 自登录 / 面板入口（2026-11-20）
+
+### 变更
+
+- **`lib/providers/trae/vault.js`（新建）**：把 `scripts/trae-vault.mjs` 的 dGMF 加密内核
+  （AES-128-CBC + SHA-512 掩码表、`seal` / `unseal`、`HDR`、`MAGIC`）原样搬进插件进程，
+  并加 `readDesktopSession(appDir)`（一次解出登录态 + 设备密钥对 + machineId）与
+  `writeCredentialFile(path, doc)`（tmp + rename 原子替换、0600）。插件从此不再要求用户手工
+  跑 `export-trae-plain.mjs` 才能读到桌面端登录态。
+- **`lib/providers/trae/keepalive.js`（新建）**：Trae 的续期器。`exchangeRefreshToken()` 逐字
+  复刻桌面端 `exchangeTokenByRefreshToken`（`POST /trae/api/v3/oauth/ExchangeToken`，body
+  `{ClientID, ClientSecret:"", RefreshToken, DeviceInfo, DeviceProof, IDEVersion}`，头只有
+  `x-cloudide-token`）；三个必踩坑写进文件头：DeviceProof 键首字母大写、签名串用 `\n` 分隔、
+  `DevicePublicKey` 必须是**登录时那把**。`adopt()` 从桌面端 storage.json 搬整份快照
+  （`adoptedFrom`/`adoptedAt` 落盘），`renew()` 做一次性令牌的「换到即落盘」，
+  `writeBackToDesktop()` 把新链回写桌面端（先备份 `storage.json.bak-<ts>`、校验键集不变、
+  保持 4 空格缩进、桌面端更新则拒写）。单飞 + 失效冷却 + `needsLogin` 置位。
+- **`lib/providers/trae/login.js`（新建）**：浏览器授权码登录。`createPkce()` + `createDeviceKeyPair()`
+  （P-256）+ `buildLoginUrl()`（字段与 `main.js` 的 `Vhe.buildLoginUrl` 对齐）+ 回环回调服务
+  （`127.0.0.1:0/authorize`，GET/POST/OPTIONS 全收，TTL 10 分钟）+ `exchangeAuthCode()` +
+  `fetchUserInfo()`；`submit()` 供反代/换 host 时手动投递。`account.username` 取
+  **`info.ScreenName`** —— `GetUserInfo` 的 Result 里没有 `Username` 字段，取错会让快照里
+  的账号名恒为 `undefined`、面板上「是谁登的」整格消失。
+- **`lib/providers/trae/index.js`**：新增 `traeKeepaliveAction` / `traeLoginAction` 与三条派生
+  路由（`/keepalive`、`/login` 由 `statusRoute` 把结尾换掉得到，多实例序号自动跟随）；
+  `traeRouteHandler` 改为把解析后的 body 传给 handle（POST 上限 64 KiB，超限 413、非法 JSON 400）；
+  `apply()` 里创建 keepalive / login 实例并塞进 deps，`refresh()` 开头先 `keepalive.tick()`
+  （顺序不能反：`store.resolve()` 遇过期直接抛）。
+- **登录 host 修正**：`/authorization` 只挂在 `https://www.trae.cn`（打 `api.trae.cn` 回 404，
+  body 是 `<center>TLB</center>`），ExchangeToken 仍走 `https://api.trae.cn`。新增常量 `LOGIN_BASE`。
+- **面板入口**（`lib/client.js`）：渠道中心每个 `kind === "trae"` 的行头新增「续期」「登录」两个
+  按钮（`onTraeKeepalive` / `onTraeLogin`，路径按 `row.id.slice(4)` 派生槽位序号），结果就地显示在
+  该行下方；两套文案各补 `traeRenew*` / `traeLogin*` / `traeNeedsLogin`。
+- `patch`：`ux-v22` → `ux-v23` → `ux-v24` → `ux-v25` → **`ux-v26`**。
+
+### 影响面
+
+- Trae 槽位此前**完全没有自续期路径**（`providers/trae` 的 6 处 `refresh` 全是模型目录/倍率，
+  凭据只按 JWT exp 判过期，过期就抛）。现在两个槽位各自独立：`trae` 与 `trae2` 分别绑定自己的
+  `connect-auth/trae*.json`、自己的 deviceId 与密钥对，巡检不再互相覆盖（自动 adopt 只在
+  「本槽自己已过期或没有快照」时触发，避免每 30 秒把所有槽位统一成桌面端当前号）。
+- 实测：四条历史 refresh token 全被判 `20101 refresh token is invalid`，只能靠浏览器登录造新链；
+  登录后 `POST /keepalive {action:"renew"}` 首次成功（`renewed:true`），并正确回写桌面端
+  storage.json（10188 B / 29 键 / 4 空格缩进不变，另存 `.bak-<ts>`）。
+- 其余渠道（workbuddy / qoder / codearts）与池路由、额度账本一行未动。
+
+### 自检
+
+- `scripts/check-all.mjs` 的 `patch` 断言同步升到 `ux-v26`；`npm run check` 五套全绿
+  （check-all / check-imports / check-pool-core / check-hardening / check-qoder-vault 14 项）。
+- `node --check` 过 `index.js` / `keepalive.js` / `login.js` / `vault.js` / `client.js`。
 ## 客户端 UI 升级（覆盖 dsh-camel-pool-v1.0.2-ui-upgraded.zip，2026-11-16）
 
 ### 变更

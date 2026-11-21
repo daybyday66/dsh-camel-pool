@@ -13,8 +13,10 @@
 原先积分池内核（`lib/providers/pool/**` + `lib/shared/pool.js`）寄居在 `dsh-connect` 包里。上游渠道中心一更新，就会把池内核整片覆盖掉（2026-11-07 的事故根因）。本包做法是**路线 B：整包 fork**——
 
 - 池内核状态机 `lib/shared/pool.js`（注册表 / credits / latches / breakers / 排序）**一字未动**，与旧包完全同源；`lib/providers/**` 只有 `pool/index.js` 的状态快照 handler 加了一处「现读偏好注入 `active` / `pool.order`」的文档投影（修 8.4 第 6/7 项，见下），不触碰任何状态机逻辑；
+- 用量账本 `lib/shared/usage.js` 的记账口径于 ux-v34 修正：CodeArts 余额含赠包/当日到期包，套餐重置会被余额差推算虚记成消耗，故该渠道改为只认上游直接上报的 credits，并对历史账本做一次性收敛迁移。此项只动 `usage.js`（非 pool.js），池内核「一字未动」承诺不受影响；
 - 旧的 `dsh-connect` 在 profile 层 `disabled: true`，由本包独占所有路由与面板；
 - 包标识全面改成 `dsh-camel-pool`（npm 名、运行时插件 id、`HUB_SETTINGS_NS`、客户端 module-loader id、settings 命名空间）；
+- 签到补领队列（ux-v35）：`lib/panel.js` 新增 `.dsh-checkin-retry.json` 持久化队列与后台扫描；Qoder 活动窗口未到（每日约 10:00 开放）／Trae 上游失败时排队到点自动补领，确保「点了签到积分到账」。此项只动面板调度与 Qoder provider 判定，不改 `shared/pool.js`，池内核「一字未动」承诺不受影响；
 - 上游渠道中心以后再更新，也碰不到本包里的池内核。
 
 因此「脱离渠道中心成为单独插件」是天然的：本包自己就是一个完整插件，同时承载三家渠道 + 积分池 + 面板 + 自动签到。
@@ -23,7 +25,7 @@
 
 | 端点 | 用途 |
 |---|---|
-| `GET /plugins/dsh-pool/status` | 积分池状态：`credits.total`、`pool.routes[10]`、`models[29]`、`pool.order`、`pool.broken` |
+| `GET /plugins/dsh-pool/status` | 积分池状态：`credits.total`、`pool.routes`、`models`、`pool.order`、`pool.broken`；每条路由另带 `modelCount` / `rawModelCount` / `hiddenModelCount` / `droppedModels`（ux-v29 诊断字段，ux-v31 补齐 `hiddenModelCount`） |
 | `GET /plugins/dsh-connect/status` | 渠道聚合状态（4 渠道 signed-in / credits / checkin.state） |
 | `POST /plugins/dsh-connect/checkin` | 一键签到（全部渠道） |
 | `POST /plugins/dsh-connect/checkin/<id>` | 单渠道签到 |
@@ -63,7 +65,7 @@
 
 **自动签到。** 沿用原机制：客户端所有 `useHubStatus()` 调用统一带 `?auto=1`（`lib/client.js` 的 `fetch(\`${STATUS_PATH}?auto=1\`)`），宿主 `lib/panel.js` 的 status handler 判 `prefsNow.autoCheckin === true && url.includes("auto=1")`，在扇出 `probeAll(..., { autoCheckin: auto })` 时顺带幂等领取当天可领积分。**没有额外定时器**，重复打开只领一次、不重复扣分。偏好项 `autoCheckin` 默认 `true`，可在设置里关掉（新额度面板的开关也写这个键）。新额度面板**刻意不触发第二次 `?auto=1`**，只读 `/plugins/dsh-pool/status`（首屏不带 refresh，打开弹窗时补一次 `?refresh=1`），避免并发重复 claim。
 
-**一个下拉装下三家 + 池。** WorkBuddy（国区/国际版多槽位）、Qoder CN、Trae CN 的免费额度合进一个模型列表，按渠道分组旁标积分倍率；`dsh-pool` 作为独立一组出现，含 `hy4flash-free` 等 29 个模型（叠加 CodeArts 5 个 + Gemini 6 个，与老渠道同 id 的自动合并成一条）。中途换渠道历史不断。三家协议（OpenAI 方言 / 私有 agent 协议 / 自定义编码流）由本包在中间翻译。
+**一个下拉装下三家 + 池。** WorkBuddy（国区/国际版多槽位）、Qoder CN、Trae CN 的免费额度合进一个模型列表，按渠道分组旁标积分倍率；`dsh-pool` 作为独立一组出现，含 `hy4flash-free` 等 26 个白名单模型（CodeArts 5 个与老渠道同 id 的自动合并成一条；Gemini 6 个已于 ux-v22 整组移出，不再进池）。模型数以 `GET /plugins/dsh-pool/status` 的 `models` 实测为准，README 不再硬写条数。中途换渠道历史不断。三家协议（OpenAI 方言 / 私有 agent 协议 / 自定义编码流）由本包在中间翻译。
 
 **池调度。** `order: "credits-first"` 按剩余额度挑路由（可切 `voucherFirst` 让百炼券殿后）；402/429 自动 latch 熔断 60s 换下一条；`xhigh` → `max` 档位降级；真实请求写 `.pool-route.log`，只记 `tokenLen` 不含任何凭据。
 ### 当日额度优先（`poolBurnExpiringFirst`，默认开）
@@ -157,7 +159,7 @@ registerPoolRoute({
 });
 ```
 
-注册完 `onPoolRoutesChanged` 会自动 `ctx.emit("llm/adapters-updated")`，模型下拉立刻出现新分组；`pool.status` 的 `routes[]` 也会多一条。参照现有 10 条（按 `priority` 升序）：`qiniu`(-1，合成余额)、`workbuddy:workbuddy1`/`workbuddy2`(0)、`trae`/`trae2`(1)、`qoder1`/`qoder2`(2)、`gemini`/`codearts`(3)、`bailian`(9，`providerId: "aliyun-bailian"`，`voucher: true` 强制殿后)。渠道侧的适配器同样在 `lib/index.js` 的渠道循环里按 `PROVIDERS` 追加即可。
+注册完 `onPoolRoutesChanged` 会自动 `ctx.emit("llm/adapters-updated")`，模型下拉立刻出现新分组；`pool.status` 的 `routes[]` 也会多一条。参照现有路由（按 `priority` 升序）：`qiniu`(-1，合成余额)、`workbuddy:workbuddy1`/`workbuddy2`(0)、`trae`/`trae2`(1)、`qoder1`/`qoder2`(2)、`codearts`(3)、`bailian`(9，`providerId: "aliyun-bailian"`，`voucher: true` 强制殿后)。渠道侧的适配器同样在 `lib/index.js` 的渠道循环里按 `PROVIDERS` 追加即可。
 
 **路线 A（后续升级）**：若想把池内核真正拆成一个独立 npm 包、由多个插件共享同一份状态，用 `globalThis[Symbol.for("dsh-pool.state.v1")]` 做跨包单例（规格 8.3 首选方案），避免两份内核各自维护 latches/credits 缓存。当前路线 B 已满足独立化目标，暂不需要。
 
@@ -184,7 +186,7 @@ registerPoolRoute({
 ## 验收清单（规格 8.4）
 
 1. `lib/**/*.js` 与 `scripts/**/*.mjs` 全部 `node --check` 通过；
-2. `GET /plugins/dsh-pool/status` 200，`routes=10`、`models=29`、`pool.broken=[]`、`active=true`；
+2. `GET /plugins/dsh-pool/status` 200，`models=26`（白名单条数）、`pool.broken=[]`、`active=true`；路由条数以实测为准，不再断言固定值；
 3. `?refresh=1` 后 `credits.total ≈ 9318.21`；
 4. `GET /plugins/dsh-connect/status` 4 渠道 `signed-in`、`issues:0`；
 5. 模型选择器出现 `dsh-pool` 分组，含 `hy4flash-free`；
@@ -202,9 +204,17 @@ registerPoolRoute({
 
 ---
 
+## 路由掉了怎么查（ux-v31）
+
+路由「莫名其妙掉了」以前只能靠猜，现在按顺序看三处：
+
+1. `GET /plugins/dsh-pool/status` 里那条路由的 `modelCount` / `rawModelCount` / `droppedModels`：`rawModelCount>0` 但 `modelCount=0` 是白名单把上游 id 全滤了（看 `droppedModels` 里是谁，缺了就往 `CURATED_MODELS` 加一行）；`rawModelCount=0` 是目录/凭据层就没给出模型（Trae 看 `trae-cn/models.json` 在不在、产品是不是误判成 solo）；路由整条不在 `pool.routes` 里是 shim/注册层没起来（看 DSH 日志里 `dsh-trae-connect: 回环 shim 启动失败`）。
+2. `pool.broken`：`auth` 冷却 10 分钟，`quota`/`transport` 60 秒内自愈；凭据真变了（续期/换号/重登）插件才会清熔断（ux-v31），同条 token 每 30 秒巡检不再清。也可以手动 `POST /plugins/dsh-pool/breakers?route=trae` 清一条。
+3. Trae 专用：渠道行上的「续期」「登录」按钮；`needsLogin` 置位说明 refresh 链已废（20101），只能浏览器重新登录造新链，续期再试只会继续失败。
+
 ## 回滚
 
-备份在 `C:\Users\00\Documents\the coding assistant\驼峰插件\_backup\20261107-193832\`：
+备份在本地 `_backup/<时间戳>/`（不要把含用户名的绝对路径写进发行版文档）：
 
 - `cordis.patch.yml` / `cordis.yml` = profile 原始配置；
 - `dsh-workbuddy-trae-qoder-connect/` = 源包整包副本。
