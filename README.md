@@ -23,9 +23,9 @@
 ## 主要功能与重点
 
 - **统一额度面板**：侧栏常驻「驼峰积分池」入口，大字显示总积分，逐条路由列出剩余额度、即将过期量、优先级、代金券与额度占比条，套餐明细默认折叠、可搜索展开（详见下一节「你会得到什么」）。
-- **自动签到 + 补领到账**：打开面板时幂等领取当天可领积分；Qoder 活动窗口未到（约每日 10:00 开放）或 Trae 上游失败时，持久化队列会在到点后自动补领，确保「点了签到，积分到账」（ux-v35）；Trae 多账号的签到设备号与会话 `deviceId` 分离，撞设备门（9074/9095）自动换号重试、领完比余额增量（ux-v44）。
+- **自动签到 + 补领到账**：打开面板时幂等领取当天可领积分；Qoder 活动窗口未到（约每日 10:00 开放）或 Trae 上游失败时，持久化队列会在到点后自动补领，确保「点了签到，积分到账」（ux-v35）。
 - **多渠道模型下拉**：WorkBuddy（多槽位）、Qoder CN、Trae CN 与积分池自身的白名单模型合进一个列表，按渠道分组、标积分倍率，中途换渠道历史不断。
-- **智能池调度**：本质是**最早过期优先**——先比积分到期时间，再比 priority，最后比注册序；402/429 自动熔断换线；当日即将过期的额度（CodeArts 每日签到分）永远排最前，任务粘性只允许在同一档内部换先后；出站直连统一带 `UA: node`（Trae 网关按 UA 把 undici/curl/空 UA 判成裸客户端回 4011，见 ux-v43）；真实请求只记 token 长度、不含凭据。
+- **智能池调度**：按剩余额度挑路由，402/429 自动熔断换线；当日即将过期的额度优先烧，粘性让位给当日桶；真实请求只记 token 长度、不含凭据。
 - **用量账本**：记录每日请求与消耗；CodeArts 这类余额含赠包/当日到期包的渠道只认上游直接上报的消耗，避免套餐重置被误记成巨额虚高（ux-v34）。
 - **即时可配**：`autoCheckin`、额度/券优先、隐藏或禁用渠道与模型、低额度自动提推理档位等均可在设置里切换、即时生效（见「配置」一节）。
 
@@ -77,7 +77,7 @@
 
 **一个下拉装下三家 + 池。** WorkBuddy（国区/国际版多槽位）、Qoder CN、Trae CN 的免费额度合进一个模型列表，按渠道分组旁标积分倍率；`dsh-pool` 作为独立一组出现，含 `hy4flash-free` 等 26 个白名单模型（CodeArts 5 个与老渠道同 id 的自动合并成一条；Gemini 6 个已于 ux-v22 整组移出，不再进池）。模型数以 `GET /plugins/dsh-pool/status` 的 `models` 实测为准，README 不再硬写条数。中途换渠道历史不断。三家协议（OpenAI 方言 / 私有 agent 协议 / 自定义编码流）由本包在中间翻译。**外加 ux-v36 起的自定义路由**：面板里自己填 `baseUrl` + 模型清单，任何 OpenAI 兼容上游都能挂进同一个下拉（见下方「自定义路由」一节）。
 
-**池调度。** `order: "credits-first"` 的排序骨架是 **积分到期时间 → priority → 注册序**（最早到期的先烧；可切 `voucherFirst` 让百炼券殿后）；402/429 自动熔断 60s 换下一条；`xhigh` → `max` 档位降级；真实请求写 `.pool-route.log`，只记 `tokenLen` 不含任何凭据。
+**池调度。** `order: "credits-first"` 按剩余额度挑路由（可切 `voucherFirst` 让百炼券殿后）；402/429 自动 latch 熔断 60s 换下一条；`xhigh` → `max` 档位降级；真实请求写 `.pool-route.log`，只记 `tokenLen` 不含任何凭据。
 ### 当日额度优先（`poolBurnExpiringFirst`，默认开）
 
 CodeArts 的每日签到 100 积分**当天 24:00 过期**，过期即归零。只按「套餐期末」排序时，池会把它和几天之后才到期的余额一视同仁，签到分常常烧不掉。
@@ -87,7 +87,6 @@ CodeArts 的每日签到 100 积分**当天 24:00 过期**，过期即归零。�
 - 适配层在 `credits()` 的 `doc.credits` 里多报两个字段 `expiring`（当日将过期余额合计）与 `expiringAt`（过期时刻，此处是本地当日 24:00 对应的 UTC 时间）；
 - 池内核 `extractCredits` 把它收进 credit；有当日桶时 `expiryMs` 取 `min(套餐期末, 当日过期时刻)`，于是这条路由在「最早过期优先」里天然排到最前；
 - `orderedRoutesFor` 额外做一次「latch 让位」：粘性 latch 原本压过一切排序，会把请求按在上一条路由上、继续烧掉长期额度。现在只要头部还有当日桶，latch 就退到当日桶之后（`burnExpiringFirst: false` 可关掉这个让位）；
-- **ux-v42 起让位是两级的**：除了当日桶，latch 也不得越过「到期时间更早」的路由（`ranksBefore` 比较到期时间与 priority 两级）。此前的窄条件会让钉在 12-05 到期的 workbuddy2 上的粘性把 11-30 到期的 trae 顶到身后——晚到期的先烧、早到期的先作废，与「最早过期优先」正好相反。同一档（到期时间与 priority 都相同、仅注册序不同）之间粘性照旧生效，例如同为 11-30 到期的 trae / trae2；
 - 每次走完一条路由都会 `invalidateCredits()`，当日桶还有剩就立刻强制刷新积分，下一次排序读到的是真实剩余，而不是 5 分钟前的缓存。
 
 100 分烧完之后 `expiring` 归 0、`expiryMs` 回到套餐期末，这条路由自然落回原位——**静默切换不需要任何特判**，全部由排序表达。
@@ -186,107 +185,6 @@ CodeArts 的每日签到 100 积分**当天 24:00 过期**，过期即归零。�
 
 ---
 
-## 多账号与「同号」保护（ux-v38）
-
-同一个渠道可以加多个槽位（`trae` / `trae2`、`qoder1` / `qoder2`、`workbuddy1` / `workbuddy2`…），它们各自独立持有凭据、各自报余额。但有两件事必须说清楚：
-
-### 桌面端只能登一个 Trae 号 —— 这是上游限制
-
-Trae 桌面 App 的登录态只存在 `%APPDATA%/Trae CN/User/globalStorage/storage.json` 的一个 `iCubeAuthInfo://icube.cloudide` 条目里。**换号登录就是把那一个条目覆盖掉**，所以「桌面上登了小号、另一个号就显示不可用」是必然的，插件无法改变。
-
-插件自己的槽位不走桌面端：每个槽一套 `(deviceId, 私钥)`，凭据落在 `~/.dsh/connect-auth/trae.json` / `trae2.json`，彼此独立。**要让两个槽指向不同账号，必须分别用浏览器登录**（池浮层 → 「＋ 添加路由」→ Trae 卡片 → 「登录」）。
-
-### 自动 adopt 不再替你做决定
-
-`keepalive` 的自动 adopt 原本只有一个用途：**把本槽救活**。但当本槽 token 到期、而桌面端登着另一个号时，旧逻辑会整份搬过来 —— 于是所有 Trae 槽在 30 秒内被统一成桌面端那个号。症状就是「两个 Trae 显示一模一样的额度」。
-
-现在 `lib/providers/trae/keepalive.js` 的 `adopt()` 分三档：
-
-| 本槽状态 | 桌面端 | 行为 |
-| --- | --- | --- |
-| 还没有账号（新槽 / 快照坏） | 任意 | 放行 —— 这是唯一合理的首次导入 |
-| 有自己的账号，且与桌面端**相同** | 同号 | 交给 `newerThan` 判定，谁新用谁（共链续期） |
-| 有自己的账号，且与桌面端**不同** | 异号 | **拒绝**，记 `adoptBlocked`，等你在面板里显式换号 |
-
-被拒绝时 `GET /plugins/dsh-trae-connect/status`（以及 `/2/status`）的 `keepalive` 段会带 `adoptBlocked: { at, localUserId, desktopUserId }`，池浮层里这一行也会挂红标「同号」。
-
-### 面板上的三个动作
-
-池浮层 → 「＋ 添加路由」→ Trae 卡片每一行有两个按钮：
-
-- **登录 / 重新登录**：带 `expectUserId`（= 本槽当前绑定的 userId）发起 PKCE。登成别的号会被后端 `login.js` 的账号守卫**当场作废**，不会污染本槽。
-- **换号**：故意不带 `expectUserId`，允许登成另一个账号并把本槽改绑过去。这是唯一会改变槽位归属的操作，必须人点。
-
-槽位行还会显示 `账号名 · userId 后 6 位` —— 以前两位都只显示「特依安」，两个槽塌成一个号时界面上完全看不出来。
-
-### 同号告警
-
-池状态文档的每条路由新增 `identity: { userId, account }`（由各 provider 的 `credits()` 自报，目前 trae 提供）。浮层把**同 kind 且 userId 相同**的路由标成「同号」，`title` 里列出是哪几条、userId 是多少。判重在界面 —— 池内核不据此做任何路由决策，请求照样按优先级与余额分发。
-
-### 设备身份隔离：两个号各用一套设备（ux-v39）
-
-ux-v38 只挡住了「自动 adopt 换号」，但还有一条更隐蔽的掉线路径：**两个槽共用同一个 `deviceId`**。
-
-服务端对同一个 `DeviceID` 只保留最近一次 AuthCode 登录注册的那把公钥。实测矩阵：
-
-| 链 | 私钥 | 结果 |
-| --- | --- | --- |
-| 特依安链 | 特依安钥 | OK |
-| 特依安链 | 桌面钥 | 20403 |
-| 桌面链 | 特依安钥 | 20403 |
-| 同一把钥 | 换 deviceId | 20403 |
-
-也就是说 `(deviceId, 私钥)` 必须成对且唯一。旧实现里 `slotIdentity()` 会在「本槽与桌面端同号」时**故意复用桌面身份**（桌面 `deviceId` + 桌面密钥对），想让桌面端跟着一起活下去。可一旦这个槽换成了别的号，它就变成「拿桌面的设备号给另一个账号续期」—— 谁先重新登录，谁就把对方顶成 20403。旧 `trae2.json` 的 `device.deviceId` 至今仍是桌面端那把，就是这条路径留下的。
-
-ux-v39 改成**一律用本槽自己的身份**：
-
-| 位置 | 行为 |
-| --- | --- |
-| `slotIdentity(doc, desktop)` | 只取 `doc.device`；发现 `local.deviceId === desktop.deviceId` 就返回 `undefined` → 调用方 `newDeviceId()` 造一套新的。**不再按账号复用桌面身份。** |
-| `conflictsWithDesktop()` | 撞车判定抽成单一函数，`renew` / `status` / 池文档三处共用。判不出账号归属时按撞车处理（宁可停下也不乱签）。 |
-| `keyMaterial(doc)` | 撞车时**拒签**并记 `deviceCollision`，绝不拿桌面设备号去签别人的链。 |
-| `renew()` | 撞车直接早退（`code: "device-collision"`，`dead: true`），不再发出必然 20403 的请求。 |
-| `writeBackToDesktop(doc)` | 新增设备号守卫：**本槽设备号 ≠ 桌面端设备号时一律不写回**。独立设备的 refreshToken 写回桌面端会让桌面端拿到不属于它设备的凭据。 |
-| `status()` | 透出 `deviceId` 与 `deviceCollision`；池路由 `identity` 里也带一份，浮层据此挂红标「撞设备号」。 |
-
-**撞车槽的自愈方式**：在池浮层对这一行点「换号」，用浏览器登一次。PKCE 登录会生成一套全新的 `deviceId` + 密钥对（`credentialFromLogin`），本槽从此与桌面端再无交集。
-
-### 自动续期不再「掉一次就废」：CodeArts 的三条加固（ux-v40）
-
-用户反馈原话：*「我的华为的codearts号为什么总是掉，总是要重复登录」*。
-
-华为签发的 token 有效期是**固定 2 小时**（不会因为一直在用而顺延），插件靠 `refresh_token` 每 5 分钟保活、到期前 30 分钟续。链路上有三处会让这条保活静默失效：
-
-| 缺陷 | 现场 | 后果 |
-| --- | --- | --- |
-| 续期 POST **没有超时** | `refreshToken()` 的 `abort` 由调用方传，而两处 `refresh()` 都没传 | STS 接了连接不回时那个 promise 永不 settle，`_inflight` 永久占位 → 该号在进程存活期内**再也不会续期**，2 小时后必掉，重启 DSH 才好 |
-| 失败一律标 `stale` 落盘 | `catch { cred.stale = true; persist(...) }` 不区分原因 | 一次 ECONNRESET / 超时就把号判成「必须重新登录」，写进磁盘后每轮 `keepAlive` 都跳过它 |
-| 先落盘再更新内存 | `await persist(next)` 抛错会进 catch | 上游已轮换出的新 `refresh_token` 被丢掉，磁盘上留着已作废的旧那份 → 之后每次续期都是 `invalid_grant`（一次性 + reuse 检测） |
-
-ux-v40 的改法：
-
-| 位置 | 行为 |
-| --- | --- |
-| `REFRESH_TIMEOUT_MS = 25e3` | 续期请求带 `AbortSignal.timeout`，挂住 25 秒就失败返回，`_inflight` 一定会被 `.finally` 清掉。 |
-| `isDefinitiveRefreshRejection()` | 只有 `refresh token failed: 400/401/403` 或 `invalid_grant` / `invalid_token` / `InvalidDPoPHeader` 家族才标 `stale`。超时、ECONNRESET、代理半开这类**保留凭据**，下一轮保活自己会活过来。 |
-| `_refreshFailedAt` + `REFRESH_RETRY_GAP_MS = 2e4` | 非 stale 失败后 20 秒内不重撞：`refresh_token` 一次性，请求停在「已送达、响应没回来」时立刻重试就是拿废 token 撞 `invalid_grant`，会把整个 token family 判死。 |
-| 先 `this._cred = next` 再 `persist(next)` | 写盘失败只记 `lastRefreshError`，**不丢**上游刚轮换出的新 token，也不回头标 `stale`。 |
-| `lastRefreshError` → `store.list()` → `codeartsAuthStatus().accounts[].refreshError` | 面板能说清「这次为什么没续上」，而不是只显示一个 stale 红标。 |
-
-历史证据：`.codearts-accounts.json.bak-1794726787427`（2026-11-14）里 `stale: true` 而 `refreshToken` 的 `counter` 已经是 **15** —— 自动续期实实在在跑通了 15 次，是第 16 次失败把号写死成「必须重新登录」。
-
-#### 还有两条「续期成功了却照样掉」（ux-v41）
-
-`refresh_token` 是**一次性**的：每次续期上游都会把旧的那枚作废、发一枚新的。所以「拿到了新 token 却没写回磁盘」和「续期失败」是同一个下场 —— 之后每次续期都是 `invalid_grant`，整个 token family 判死。ux-v40 之后还剩两条这种通道：
-
-| 通道 | 触发 | 修法 |
-| --- | --- | --- |
-| 槽位在等 STS 响应期间被 `invalidate()`（重读磁盘、暂停、置顶、重新登录都走它） | `refresh()` 的 `stillCurrent()` 为假 → 刚拿到的新凭证被 `return next` 直接丢弃，磁盘还是已作废的旧 token | 这种情况仍尝试补落盘，但带守卫：**只有文档里该账号的 `refresh_token` 还是本次消费的那一枚**才写；用户刚重登换了新链时守卫不成立，绝不覆盖 |
-| 保活失败被静默吞掉 | `void store.keepAlive().catch(function () {})` | 把 `{ checked, refreshed, needsLogin }` 与各槽位 `lastRefreshError` 原文写进宿主日志，同一句话只打一次 |
-
-一句话总结现在的行为：**只要这台机器上还有一份没被判死的 `refresh_token`（活 30 天），插件就会自己续下去**；真正需要重新登录只剩三种情况 —— 上游明确判死（`invalid_grant` / `InvalidDPoPHeader`）、账号被上游吊销、或者 DSH 连续关闭超过 30 天把 `refresh_token` 也放凉了。
-
----
 ## 后续：添加更多渠道以扩充模型选择
 
 池内核对外只认一个契约 `registerPoolRoute(route)`（`lib/shared/pool.js:99-105` 硬校验）。新增一条渠道 = 在 `lib/providers/pool/index.js` 的 `apply()` 里多注册一个 route 对象：

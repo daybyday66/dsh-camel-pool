@@ -3,10 +3,9 @@
 //
 // 用法: node scripts/check-pool-core.mjs
 //
-// 为什么要有它：池的先后顺序全靠三条看不见的规则——
+// 为什么要有它：ux-v14 的「当日额度优先烧」全靠两条看不见的规则——
 //   ① extractCredits 认出 expiring 之后把 expiryMs 拉近到当日午夜；
-//   ② orderedRoutesFor 按「到期时间 → priority → 注册序」排序（最早的先烧）；
-//   ③ 任务粘性（latch）只能在同一档内部换先后，不得越过更早到期或还有当日余额的路由。
+//   ② orderedRoutesFor 让任务粘性（latch）给还有当日余额的路由让位。
 // 这两条用 grep 断言不出来（改一个 `??` 成 `||` 照样过静态检查），只能跑。
 // 全部用假路由注入，不碰网络、不碰真实凭据，可在 CI 直接跑。
 import {
@@ -91,48 +90,9 @@ ok("无 latch：当日过期路由排第一", plain[0] === "codearts", plain);
 // ⑤ latch 让位：粘性不得越过还有当日余额的路由
 setLatch(MODEL, "qoder");
 const latched = orderedRoutesFor(MODEL, {}).map((item) => item.routeKey);
-ok("latch 让位给当日额度", latched[0] === "codearts", latched);
-// ux-v36：粘性也不得越过「到期更早」的路由。这里 qoder 是 12-03 到期、trae 是 11-30 到期，
-// 于是 latch 只能贴在 trae 后面 —— 否则晚到期的先烧、早到期的先作废，正好反过来。
-ok("latch 不得越过更早到期的路由", latched[1] === "trae" && latched[2] === "qoder", latched);
-
-// ⑤b ux-v36：同一档（到期时间与 priority 都相同，只有注册序不同）之间粘性仍然生效。
-// 真机上这就是「同为 11-30 到期、priority 都是 1 的 trae / trae2」之间来回钉住。
-const releaseTieA = registerPoolRoute(fakeRoute("tie-a", 1, {
-  status: "signed-in",
-  credits: { remaining: 100, total: 100, endTime: "2026-11-30T00:00:00.000Z" },
-}));
-const releaseTieB = registerPoolRoute(fakeRoute("tie-b", 1, {
-  status: "signed-in",
-  credits: { remaining: 100, total: 100, endTime: "2026-11-30T00:00:00.000Z" },
-}));
-await refreshPoolCredits({ force: true, only: ["tie-a", "tie-b"] });
-setLatch(MODEL, "tie-b");
-const sameTier = orderedRoutesFor(MODEL, {}).map((item) => item.routeKey);
-ok("同档路由之间粘性仍生效", sameTier[0] === "codearts" && sameTier[1] === "tie-b", sameTier);
-releaseTieA();
-releaseTieB();
-
-// ⑤c ux-v36 真实形状回归（用户报的那一例）：workbuddy 两条 12-05 / 12-11 到期、priority 0，
-// trae 11-30 到期、priority 1。latch 钉在 workbuddy2 上时，trae 必须仍然排在它前面 ——
-// priority 更小只是「同档内的次序」，压不过「更早到期」。
-const releaseWb2 = registerPoolRoute(fakeRoute("wb2", 0, {
-  status: "signed-in",
-  credits: { remaining: 1843, total: 2000, endTime: "2026-12-05T07:20:36.000Z" },
-}));
-const releaseWb1 = registerPoolRoute(fakeRoute("wb1", 0, {
-  status: "signed-in",
-  credits: { remaining: 2284, total: 2400, endTime: "2026-12-11T18:08:22.000Z" },
-}));
-await refreshPoolCredits({ force: true, only: ["wb1", "wb2"] });
-setLatch(MODEL, "wb2");
-const realShape = orderedRoutesFor(MODEL, {}).map((item) => item.routeKey);
-ok("真实形状：11-30 的 trae 必须排在 12-05 的 wb2 之前", realShape.indexOf("trae") < realShape.indexOf("wb2") && realShape.indexOf("wb2") < realShape.indexOf("wb1"), realShape);
-releaseWb2();
-releaseWb1();
+ok("latch 让位给当日额度", latched[0] === "codearts" && latched[1] === "qoder", latched);
 
 // ⑥ 开关关掉时保留 ux-v13 的旧行为（粘性压过一切）
-setLatch(MODEL, "qoder");
 const legacy = orderedRoutesFor(MODEL, { burnExpiringFirst: false }).map((item) => item.routeKey);
 ok("burnExpiringFirst=false 保留旧粘性行为", legacy[0] === "qoder", legacy);
 
