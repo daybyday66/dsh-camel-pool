@@ -3,38 +3,6 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
-## 内核 ux-v35：签到补领到账修正（2026-11-21）
-
-修「点了签到却不到账」：Qoder 活动窗口未到（每日约 10:00 才放签到福利）时，旧逻辑把 `showCampaign=true` 误判成 `done`，面板显示已签却不加分；Trae 上游偶发「参与用户太多」失败后没有重试。本版只动面板调度与 Qoder provider 判定，池内核状态机 `lib/shared/pool.js` 仍未改动。
-
-### 变更
-
-- **判定**：Qoder `claimCampaign()` 仅在 `claimedToday` 时返回 `already-claimed`；无可领奖励且窗口未到时返回 `pending` + `retryAt`（当天 10:05 或未来 CLAIM_BENEFIT 活动开始 +1 分钟），不再假报成功。面板 `checkinOf()` 同样只认 `claimedToday` 为 `done`，`showCampaign` 但不可领改为「待补领」提示。
-- **补领队列**：`lib/panel.js` 新增持久化队列 `.dsh-checkin-retry.json`（仅 qoder / trae，原子写、0600、保留 7 天），记录当天成功 / 待重试状态。
-- **后台扫描**：`registerPanel()` 内启动 15s 首次 + 20min 周期扫描，尊重 `autoCheckin` 与 `disabledChannels`，对到期队列 POST 各自 `checkinPath` 重试；Trae 失败 20min 后重试，Qoder 到点后重试；面板卸载时清理定时器。
-- **端口兜底**：后台 sweep 无 req 上下文，原 `loopbackBaseFallback()` 只读 env、缺 `DSH_PORT` 时写死 3079 会打空；改为记录最近一次真实请求解析出的回环基址 `lastKnownBase`（由 `fanoutBaseOf(req)` 喂入），后台任务复用与 GUI 一致的正确端口。
-- **归一化**：`normalizeClaim()` 把 `pending/retryable` 映射成 `unsupported` + 说明文案，一键签到不再把「窗口未开」算成失败。
-
-### 自检
-
-- `node --check lib/panel.js lib/providers/qoder/index.js` 通过；`npm run check` 全绿。
-- 热重载后 `GET /plugins/dsh-qoder-connect/1/status` 的 checkin 带 `retryable/retryAt`；到点后台 sweep 自动补领，积分到账。
-
-## 内核 ux-v34：用量记账口径修正（2026-11-21）
-
-修用量页「累计积分消耗」虚高（实测显示 11 万+，真实消费约几百）。纯记账口径修正，池内核状态机 `lib/shared/pool.js` 仍未改动。
-
-### 变更
-
-- **根因**：`lib/shared/usage.js` 的 `noteCreditObservation()` 把每次余额下降都记成消耗。CodeArts 余额口径 `usageTotalPackageCredit.package_credit_remain` 含赠送包与当日到期包，套餐周期重置 / 赠包过期会被 20s 高频采样拆成无数小于 `MAX_CREDIT_DELTA`（10000）的小下降，绕过单次护栏后被不断累加（零请求日也记 1.5 万～3.5 万）。
-- **治本**：CodeArts（routeKey `codearts` / meta.kind `codearts`）不再按余额差记账，只认上游 usage 事件直接上报的 `directCredits`；其余渠道余额差推算保持不变。
-- **一次性账本迁移**：`ensureLoaded()` 里把 codearts 每天 platform.credits 收敛到 directCredits，`meta.__usageV2Migrated` 幂等标记，抹掉历史虚高而不动 token / 请求数 / 其它平台。
-- **面板**：zh/en `usageNote` 改成自解释文案；累计消耗远超当前额度时，用量页顶部挂醒目提示，说明含非消费性余额变动、仅供参考。
-
-### 自检
-
-- `npm run check`、`node --check` 均通过；热重载后 `GET /plugins/dsh-connect/usage` 累计 credits 回落，`/plugins/dsh-pool/status` patch 保持兼容。
-
 ## 内核 ux-v33：面板显示优化（2026-11-20）
 
 只改 `lib/client.js`（纯展示层），池内核、路由、调度一行未动。
