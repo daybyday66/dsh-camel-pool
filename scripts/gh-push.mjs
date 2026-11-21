@@ -168,6 +168,57 @@ async function buildTree(commitSha, parentSha, baseTree, token, full, cache) {
   return (await api("/repos/" + full + "/git/trees", { method: "POST", body: JSON.stringify({ base_tree: baseTree, tree: entries }) }, token)).sha;
 }
 
+/**
+ * 远端有本地没有的提交（别处推过、或远端被强推过）时的快速路径：
+ * 把本地 HEAD 的完整树挂到远端最新提交上，做成一个 graft 提交，避免把本地全部历史重建成根提交链。
+ * 只上传与远端内容不同的 blob，其余按内容寻址直接复用，因此耗时与改动量成正比，而不是仓库体积。
+ */
+async function graftHead({ full, token, headSha, remoteSha }) {
+  log("远端有本地没有的提交，按 HEAD 内容 graft 到 " + remoteSha.slice(0, 8) + "…");
+  const remoteTree = await api("/repos/" + full + "/git/trees/" + remoteSha + "?recursive=1", {}, token);
+  const remoteBlobs = new Map();
+  for (const item of remoteTree.tree ?? []) {
+    if (item.type === "blob") remoteBlobs.set(item.path, item.sha);
+  }
+  const local = new Map();
+  for (const row of git(["ls-tree", "-r", headSha]).trim().split("\n").filter(Boolean)) {
+    const tab = row.indexOf("\t");
+    if (tab < 0) continue;
+    const [mode, type, sha] = row.slice(0, tab).split(" ");
+    if (type === "blob") local.set(row.slice(tab + 1), { mode, sha });
+  }
+  const entries = [];
+  const cache = new Map();
+  let reused = 0;
+  let uploaded = 0;
+  for (const [path, info] of local) {
+    if (remoteBlobs.get(path) === info.sha) {
+      entries.push({ path, mode: info.mode, type: "blob", sha: info.sha });
+      reused += 1;
+      continue;
+    }
+    entries.push({ path, mode: info.mode, type: "blob", sha: await uploadBlob(info.sha, token, full, cache) });
+    uploaded += 1;
+  }
+  for (const path of remoteBlobs.keys()) {
+    if (!local.has(path)) entries.push({ path, mode: "100644", type: "blob", sha: null });
+  }
+  const tree = (await api("/repos/" + full + "/git/trees", { method: "POST", body: JSON.stringify({ tree: entries }) }, token)).sha;
+  const parts = splitCommit(headSha);
+  const made = await api("/repos/" + full + "/git/commits", {
+    method: "POST",
+    body: JSON.stringify({
+      message: parts.body,
+      tree,
+      parents: [remoteSha],
+      author: { name: parts.authorName, email: parts.authorEmail, date: toIso(parts.authorDate) },
+      committer: { name: parts.committerName, email: parts.committerEmail, date: toIso(parts.committerDate) },
+    }),
+  }, token);
+  await api("/repos/" + full + "/git/refs/heads/main", { method: "PATCH", body: JSON.stringify({ sha: made.sha, force: true }) }, token);
+  note("main -> " + made.sha.slice(0, 8) + "（graft：复用 " + reused + " 个 blob，上传 " + uploaded + " 个）");
+}
+
 async function main() {
   const { full } = repoInfo();
   const token = readToken();
@@ -186,19 +237,30 @@ async function main() {
 
   let known = false;
   try { git(["cat-file", "-e", remoteSha + "^{commit}"]); known = true; } catch { known = false; }
-  const range = known ? [remoteSha + "..HEAD"] : ["HEAD"];
+  if (!known) {
+    // 本地没有远端最新提交（别处推过 / 远端被强推）：重建整条历史既慢又会在根提交上崩，
+    // 直接把 HEAD 的树 graft 到远端 HEAD 上，只上传有差异的 blob。
+    await graftHead({ full, token, headSha, remoteSha });
+    const after = await api("/repos/" + full + "/git/ref/heads/main", {}, token);
+    if (after.object.sha === headSha) {
+      try { git(["update-ref", "refs/remotes/origin/main", headSha]); } catch {}
+      note("本地/远端 SHA 一致，下次可增量同步");
+    } else {
+      log("提示：远端 SHA 与本地不同（graft 提交），下次仍走 graft 快速路径");
+    }
+    return;
+  }
+  const range = [remoteSha + "..HEAD"];
   const commits = git(["rev-list", "--reverse", ...range]).trim().split("\n").filter(Boolean);
   if (!commits.length) { log("没有需要同步的提交"); return; }
 
-  let parentRemote = known ? remoteSha : null;
-  let baseTree = null;
-  if (known) baseTree = (await api("/repos/" + full + "/git/commits/" + remoteSha, {}, token)).tree.sha;
+  let parentRemote = remoteSha;
+  let baseTree = (await api("/repos/" + full + "/git/commits/" + remoteSha, {}, token)).tree.sha;
 
   const cache = new Map();
   const remoteShas = [];
   for (const sha of commits) {
     const parts = splitCommit(sha);
-    const parentLocal = git(["rev-parse", sha + "^"], { stdio: ["pipe", "pipe", "pipe"] }).trim().split("\n")[0];
     let parentLocalSha = null;
     try { parentLocalSha = git(["rev-parse", sha + "^"]).trim(); } catch { parentLocalSha = null; }
     const tree = await buildTree(sha, parentLocalSha, baseTree === null ? null : baseTree, token, full, cache);
@@ -219,7 +281,7 @@ async function main() {
     log("  已上传 " + sha.slice(0, 8) + "  " + parts.body.split("\n")[0].slice(0, 48));
   }
 
-  await api("/repos/" + full + "/git/refs/heads/main", { method: "PATCH", body: JSON.stringify({ sha: parentRemote, force: !known }) }, token);
+  await api("/repos/" + full + "/git/refs/heads/main", { method: "PATCH", body: JSON.stringify({ sha: parentRemote, force: false }) }, token);
   note("main -> " + parentRemote.slice(0, 8) + "（" + commits.length + " 个提交）");
 
   const aligned = remoteShas.every(([l, r]) => l === r);
