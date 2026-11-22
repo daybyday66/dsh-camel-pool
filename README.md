@@ -222,6 +222,34 @@ Trae 桌面 App 的登录态只存在 `%APPDATA%/Trae CN/User/globalStorage/stor
 
 池状态文档的每条路由新增 `identity: { userId, account }`（由各 provider 的 `credits()` 自报，目前 trae 提供）。浮层把**同 kind 且 userId 相同**的路由标成「同号」，`title` 里列出是哪几条、userId 是多少。判重在界面 —— 池内核不据此做任何路由决策，请求照样按优先级与余额分发。
 
+### 设备身份隔离：两个号各用一套设备（ux-v39）
+
+ux-v38 只挡住了「自动 adopt 换号」，但还有一条更隐蔽的掉线路径：**两个槽共用同一个 `deviceId`**。
+
+服务端对同一个 `DeviceID` 只保留最近一次 AuthCode 登录注册的那把公钥。实测矩阵：
+
+| 链 | 私钥 | 结果 |
+| --- | --- | --- |
+| 特依安链 | 特依安钥 | OK |
+| 特依安链 | 桌面钥 | 20403 |
+| 桌面链 | 特依安钥 | 20403 |
+| 同一把钥 | 换 deviceId | 20403 |
+
+也就是说 `(deviceId, 私钥)` 必须成对且唯一。旧实现里 `slotIdentity()` 会在「本槽与桌面端同号」时**故意复用桌面身份**（桌面 `deviceId` + 桌面密钥对），想让桌面端跟着一起活下去。可一旦这个槽换成了别的号，它就变成「拿桌面的设备号给另一个账号续期」—— 谁先重新登录，谁就把对方顶成 20403。旧 `trae2.json` 的 `device.deviceId` 至今仍是桌面端那把，就是这条路径留下的。
+
+ux-v39 改成**一律用本槽自己的身份**：
+
+| 位置 | 行为 |
+| --- | --- |
+| `slotIdentity(doc, desktop)` | 只取 `doc.device`；发现 `local.deviceId === desktop.deviceId` 就返回 `undefined` → 调用方 `newDeviceId()` 造一套新的。**不再按账号复用桌面身份。** |
+| `conflictsWithDesktop()` | 撞车判定抽成单一函数，`renew` / `status` / 池文档三处共用。判不出账号归属时按撞车处理（宁可停下也不乱签）。 |
+| `keyMaterial(doc)` | 撞车时**拒签**并记 `deviceCollision`，绝不拿桌面设备号去签别人的链。 |
+| `renew()` | 撞车直接早退（`code: "device-collision"`，`dead: true`），不再发出必然 20403 的请求。 |
+| `writeBackToDesktop(doc)` | 新增设备号守卫：**本槽设备号 ≠ 桌面端设备号时一律不写回**。独立设备的 refreshToken 写回桌面端会让桌面端拿到不属于它设备的凭据。 |
+| `status()` | 透出 `deviceId` 与 `deviceCollision`；池路由 `identity` 里也带一份，浮层据此挂红标「撞设备号」。 |
+
+**撞车槽的自愈方式**：在池浮层对这一行点「换号」，用浏览器登一次。PKCE 登录会生成一套全新的 `deviceId` + 密钥对（`credentialFromLogin`），本槽从此与桌面端再无交集。
+
 ---
 ## 后续：添加更多渠道以扩充模型选择
 
