@@ -90,7 +90,7 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v36"', "内核版本标记已升 ux-v36");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v38"', "内核版本标记已升 ux-v38");
 // ux-v29：路由「莫名其妙掉了」的三处根因回归闸。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "deepseek-v4-flash-official", "Trae 兜底 id 进白名单（不再静默过滤）");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "export function routeModelDiagnostics", "路由掉线诊断函数在位");
@@ -139,6 +139,22 @@ mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "for (const release 
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "const hasCustom = [...group.candidates.keys()].some", "白名单旁路：自定义模型不被静默过滤");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "customRouteKeys.add(route.key)", "旁路按 route.kind 收集自定义 key");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "synthetic: true", "旁路给合成 curated 条目（比较器读 c.tier 不抛）");
+// ux-v38：Trae 多槽被自动 adopt 成同一个号。这条链每一环缺了都会退回事故态，逐环上闸。
+// 根因：桌面端同一时刻只能登一个 Trae 号，而 tick() 在该槽 localStale 时无条件 adopt 桌面身份，
+// 把「救活这个槽」变成了「替这个槽决定用哪个号」，于是所有槽在 30s 内统一成桌面端那个号。
+mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), 'code: "other-account"', "adopt 换号保护：本槽已有别的账号时拒绝自动覆盖");
+mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), "let adoptBlocked;", "adoptBlocked 记录被挡下的换号（面板据此解释为什么没采用桌面号）");
+mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), "localUserId: typeof doc?.userId === \"string\"", "status() 透出本槽账号，界面才能判同号");
+mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), "desktopUserId: (() => {", "status() 透出桌面端当前账号");
+mustContain(path.join(ROOT, "lib/providers/trae/index.js"), "identity: {", "trae 池路由上报账号归属（同号判定的唯一数据源）");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "identity: credit?.identity,", "池状态文档把 identity 带到每条路由");
+mustContain(path.join(ROOT, "lib/panel.js"), "...typeof raw.userId === \"string\" && raw.userId !== \"\" ? { userId: raw.userId } : {},", "normalizeChannel 透出 userId（同号判定 + 登录守卫都要）");
+mustContain(path.join(ROOT, "lib/panel.js"), "userId: row === undefined ? undefined : row.userId,", "auth 端点把 userId 返回给前端");
+mustContain(path.join(ROOT, "lib/client.js"), "expectUserId: wanted", "前端登录带 expectUserId，让后端账号守卫生效");
+mustContain(path.join(ROOT, "lib/client.js"), "const rebind = options !== undefined", "「换号」是显式动作，不是默认行为");
+mustContain(path.join(ROOT, "lib/client.js"), "const sameAccountKeys = (() => {", "池浮层同号检测");
+mustContain(path.join(ROOT, "lib/client.js"), "sameAccountHint:", "同号时给出人话解释（中英各一份）");
+mustNotContain(path.join(ROOT, "lib/client.js"), "const wanted = String(channel.userId || '');\n\t\t\t\t\treturn {\n\t\t\t\t\t\tstart: () => postJson(path, { action: 'start' })", "重新登录不再无条件不传 expectUserId");
 // ux-v19：池转发的兜底抓取必须是 directFetch，不能回落 globalThis.fetch。
 // billion-context 用 defineProperty 接管全局 fetch 并把自己重链到最外层，未声明
 // route.fetch 的路由（trae/trae2/qoder/workbuddy/bailian/qiniu）于是被它的
