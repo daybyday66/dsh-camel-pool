@@ -17,10 +17,12 @@
  *   SKIP_GIT_PUSH=1 node scripts/gh-push.mjs   # 跳过 git push，直接走 API
  */
 import { execFileSync } from "node:child_process";
+import { request as httpsRequest } from "node:https";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { lookup as dnsLookup, resolve4 } from "node:dns";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const QUIET = process.argv.includes("--quiet");
@@ -56,9 +58,77 @@ function repoInfo() {
   return { full: m[1] + "/" + m[2] };
 }
 
+/**
+ * 直连 api.github.com，**绕开 hosts 文件**。
+ *
+ * 本机 hosts 被 Steam++（Watt Toolkit）写进了 29 条 `127.0.0.1 api.github.com`
+ * 之类的屏蔽项，于是 `fetch("https://api.github.com/...")` 会连到本机 443 ——
+ * 表现就是 `同步失败：fetch failed`，看起来像"网络不通"，其实是解析被改写了。
+ * Node 的 fetch（undici）没有暴露 custom lookup，所以这里改用手写 https 请求：
+ * 用 DNS 服务器重新解析真实 IP，再把它钉进 `lookup`。
+ *
+ * 解析失败时退回系统解析（等于保持原行为），不会比原来更差。
+ */
+const resolvedHosts = new Map();
+/**
+ * 拿真实 IP。**必须用 dns.resolve4**：它直接问 DNS 服务器，不读 hosts；
+ * dns.lookup 走 getaddrinfo，会被 hosts 里那 29 条 `127.0.0.1 api.github.com`
+ * 带偏 —— 那样虽然拿到了 127.x 我们自己会过滤，但退回 lookup 还是 127，白绕。
+ */
+function pinAddress(hostname) {
+  if (resolvedHosts.has(hostname)) return resolvedHosts.get(hostname);
+  const pending = new Promise((resolve) => {
+    resolve4(hostname, (error, addresses) => {
+      const address = error || !Array.isArray(addresses) ? undefined : addresses.find((item) => !item.startsWith("127."));
+      if (address !== undefined) return resolve(address);
+      dnsLookup(hostname, { family: 4, all: false }, (fallbackError, fallback) => {
+        if (fallbackError || typeof fallback !== "string" || fallback.startsWith("127.")) resolve(undefined);
+        else resolve(fallback);
+      });
+    });
+  });
+  resolvedHosts.set(hostname, pending);
+  return pending;
+}
+
+function httpsJson(url, init) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    pinAddress(target.hostname).then((address) => {
+      const headers = { ...(init && init.headers ? init.headers : {}) };
+      /**
+       * 拿到真实 IP 时用 `host: <ip>` + `servername: <域名>` 的写法，
+       * 而不是给 Agent 传 `lookup` 回调。
+       *
+       * 实测（Node 22 + Windows schannel）：走 lookup 回调会报
+       * `Invalid IP address: undefined` —— 那个三参回调在 TLS 建立路径上拿到的
+       * options 里 family/all 混着传，返回值被丢掉。改成直接把 IP 当 host，
+       * 用 servername 做 SNI + 证书校验，等价且不碰那套回调。
+       */
+      const req = httpsRequest({
+        host: address === undefined ? target.hostname : address,
+        port: Number(target.port === "" ? 443 : target.port),
+        path: target.pathname + target.search,
+        method: (init && init.method) || "GET",
+        servername: target.hostname,
+        headers: { ...headers, host: target.hostname },
+      }, (res) => {
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString("utf8") }));
+      });
+      req.on("error", reject);
+      req.setTimeout(60000, () => req.destroy(new Error("api.github.com 请求超时（60s）")));
+      if (init && init.body !== undefined) req.write(init.body);
+      req.end();
+    }, reject);
+  });
+}
+
 async function api(path, init, token) {
-  const res = await fetch("https://api.github.com" + path, {
-    ...init,
+  const res = await httpsJson("https://api.github.com" + path, {
+    method: (init && init.method) || "GET",
+    body: init && init.body,
     headers: {
       Authorization: "Bearer " + token,
       Accept: "application/vnd.github+json",
@@ -67,10 +137,10 @@ async function api(path, init, token) {
       ...(init && init.body ? { "Content-Type": "application/json" } : {}),
     },
   });
-  const text = await res.text();
+  const text = res.text;
   let doc;
   try { doc = JSON.parse(text); } catch { doc = text; }
-  if (!res.ok) throw new Error(path + " -> " + res.status + " " + JSON.stringify(doc).slice(0, 300));
+  if (res.status < 200 || res.status >= 300) throw new Error(path + " -> " + res.status + " " + JSON.stringify(doc).slice(0, 300));
   return doc;
 }
 
