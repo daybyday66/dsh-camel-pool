@@ -185,6 +185,44 @@ CodeArts 的每日签到 100 积分**当天 24:00 过期**，过期即归零。�
 
 ---
 
+## 多账号与「同号」保护（ux-v38）
+
+同一个渠道可以加多个槽位（`trae` / `trae2`、`qoder1` / `qoder2`、`workbuddy1` / `workbuddy2`…），它们各自独立持有凭据、各自报余额。但有两件事必须说清楚：
+
+### 桌面端只能登一个 Trae 号 —— 这是上游限制
+
+Trae 桌面 App 的登录态只存在 `%APPDATA%/Trae CN/User/globalStorage/storage.json` 的一个 `iCubeAuthInfo://icube.cloudide` 条目里。**换号登录就是把那一个条目覆盖掉**，所以「桌面上登了小号、另一个号就显示不可用」是必然的，插件无法改变。
+
+插件自己的槽位不走桌面端：每个槽一套 `(deviceId, 私钥)`，凭据落在 `~/.dsh/connect-auth/trae.json` / `trae2.json`，彼此独立。**要让两个槽指向不同账号，必须分别用浏览器登录**（池浮层 → 「＋ 添加路由」→ Trae 卡片 → 「登录」）。
+
+### 自动 adopt 不再替你做决定
+
+`keepalive` 的自动 adopt 原本只有一个用途：**把本槽救活**。但当本槽 token 到期、而桌面端登着另一个号时，旧逻辑会整份搬过来 —— 于是所有 Trae 槽在 30 秒内被统一成桌面端那个号。症状就是「两个 Trae 显示一模一样的额度」。
+
+现在 `lib/providers/trae/keepalive.js` 的 `adopt()` 分三档：
+
+| 本槽状态 | 桌面端 | 行为 |
+| --- | --- | --- |
+| 还没有账号（新槽 / 快照坏） | 任意 | 放行 —— 这是唯一合理的首次导入 |
+| 有自己的账号，且与桌面端**相同** | 同号 | 交给 `newerThan` 判定，谁新用谁（共链续期） |
+| 有自己的账号，且与桌面端**不同** | 异号 | **拒绝**，记 `adoptBlocked`，等你在面板里显式换号 |
+
+被拒绝时 `GET /plugins/dsh-trae-connect/status`（以及 `/2/status`）的 `keepalive` 段会带 `adoptBlocked: { at, localUserId, desktopUserId }`，池浮层里这一行也会挂红标「同号」。
+
+### 面板上的三个动作
+
+池浮层 → 「＋ 添加路由」→ Trae 卡片每一行有两个按钮：
+
+- **登录 / 重新登录**：带 `expectUserId`（= 本槽当前绑定的 userId）发起 PKCE。登成别的号会被后端 `login.js` 的账号守卫**当场作废**，不会污染本槽。
+- **换号**：故意不带 `expectUserId`，允许登成另一个账号并把本槽改绑过去。这是唯一会改变槽位归属的操作，必须人点。
+
+槽位行还会显示 `账号名 · userId 后 6 位` —— 以前两位都只显示「特依安」，两个槽塌成一个号时界面上完全看不出来。
+
+### 同号告警
+
+池状态文档的每条路由新增 `identity: { userId, account }`（由各 provider 的 `credits()` 自报，目前 trae 提供）。浮层把**同 kind 且 userId 相同**的路由标成「同号」，`title` 里列出是哪几条、userId 是多少。判重在界面 —— 池内核不据此做任何路由决策，请求照样按优先级与余额分发。
+
+---
 ## 后续：添加更多渠道以扩充模型选择
 
 池内核对外只认一个契约 `registerPoolRoute(route)`（`lib/shared/pool.js:99-105` 硬校验）。新增一条渠道 = 在 `lib/providers/pool/index.js` 的 `apply()` 里多注册一个 route 对象：
