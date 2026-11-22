@@ -3,6 +3,35 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 内核 ux-v39：Trae 多槽设备身份隔离，谁续期都不再顶掉别人（2026-11-22）
+
+用户反馈原话：*「不管桌面端如何，反正就是能不能保证我这些路由在登录不同的两个号到插件里时间不会莫名其妙掉」*。
+
+ux-v38 挡住了「自动 adopt 换号」，但漏了一条更隐蔽的掉线路径：**两个槽共用同一个 `deviceId`**。服务端对同一个 `DeviceID` 只保留最近一次 AuthCode 登录注册的那把公钥，实测矩阵是「特依安链 + 特依安钥 → OK；特依安链 + 桌面钥 → 20403；桌面链 + 特依安钥 → 20403；同一把钥换 deviceId → 20403」。所以 `(deviceId, 私钥)` 必须成对且唯一。
+
+### 根因
+
+`slotIdentity()` 旧实现里有一个「同号就复用桌面身份」的分支：本槽账号与桌面端相同时，直接返回桌面的 `deviceId` + 桌面密钥对，本意是让桌面端跟槽位共链、一起活下去。可这个槽一旦换成别的号，就变成**拿桌面的设备号给另一个账号续期** —— 两边谁先重新登录，谁就把对方判成 20403。`~/.dsh/connect-auth/trae2.json` 里 `device.deviceId` 至今仍是桌面端那把（`3119781355468217`），账号却已经是 `dd`，就是这条路径留下的现场。
+
+更糟的是 `writeBackToDesktop()` 无条件把续期结果写回桌面 `storage.json`：独立设备的 refreshToken 被写进桌面端后，桌面端下次启动会拿它续期，而它绑的是另一个 `deviceId` —— 桌面端被投毒，槽位也保不住。
+
+### 变更
+
+- **`slotIdentity()` 只认本槽身份**（`lib/providers/trae/keepalive.js`）：删掉「同号复用桌面身份」分支。现在只取 `doc.device`；发现 `local.deviceId === desktop.deviceId` 就返回 `undefined`，调用方 `newDeviceId()` 造一套新的。撞车槽点一次「换号」即自愈（PKCE 登录必然生成新 `deviceId` + 新密钥对）。
+- **`conflictsWithDesktop()` 抽出单一判定**（同上）：`renew` / `keyMaterial` / `status` / 池文档四处共用同一份逻辑。判不出账号归属时按撞车处理 —— 宁可停下也不乱签。
+- **`keyMaterial()` 撞车拒签**（同上）：用 `doc.device` 密钥与回落桌面密钥两条分支都加撞车判定，命中则记 `deviceCollision = { deviceId, localUserId, desktopDeviceId, at }` 并返回 `undefined`。
+- **`renew()` 遇撞车早退**（同上）：`code: "device-collision"`、`dead: true`、`lastAction: "device-collision"`，并置 `needsLogin`，不再发出必然 20403 的请求；`lastCollisionDeviceId` 去重，同一设备号只 warn 一次。
+- **`writeBackToDesktop()` 加设备号守卫**（同上）：本槽设备号 ≠ 桌面端设备号时一律不写回，理由写明「写回会让桌面端拿到不属于它设备的 refreshToken」。这条把「续期」与「污染桌面端」彻底解耦。
+- **`status()` 透出 `deviceId` / `deviceCollision`**（同上）；**池路由 `identity` 一并带出**（`lib/providers/trae/index.js`），浮层才能解释「为什么这条 Trae 需要点一次换号」。
+- **池浮层「撞设备号」告警**（`lib/client.js`）：路由行在「同号」标签旁新增红标，`title` 里给设备号与可执行动作（点「换号」重登一次）。中英各补 `deviceCollision` / `deviceCollisionHint` 两键。
+- **登录侧同步简化**（`lib/providers/trae/index.js`）：`slotIdentity(doc, { deviceId: desktop.deviceId })` —— 只按设备号判撞车，不再把 `userId` / `keyPair` 传进去诱导复用。
+- **内核标记**：`patch` 从 `ux-v38` 升到 `ux-v39`。
+
+### 自检
+
+- `npm run check` 全绿（check-all / check-imports / check-pool-core / check-hardening / check-qoder-vault 14 项）。新增 10 条 ux-v39 回归闸，逐环覆盖：`slotIdentity` 撞车返回 `undefined`、`conflictsWithDesktop` 存在、`keyMaterial` 记 `deviceCollision`、`renew` 的 `code: "device-collision"`、`writeBackToDesktop` 的投毒守卫、`status()` 的 `deviceCollision`、登录侧的 `slotIdentity(doc, { deviceId: desktop.deviceId })`、池路由 `identity.deviceCollision`、前端 `r.identity.deviceCollision === true` 与 `deviceCollisionHint`。
+- 隔离单测（临时脚本，已删）：造假快照（userId 999、过期假 JWT、假 refreshToken）+ 真桌面快照（userId 2539239213373945），跑 `tick()` → 返回 `code: "device-collision"`、`userId` 保持 `999` 未被覆盖、`adoptBlocked` 记录正确、连跑两轮只 warn 一次。
+- 现状：`trae2.json` 的 `device.deviceId` 仍是桌面端那把，所以 ux-v39 上线后 `/plugins/dsh-trae-connect/2/keepalive` 会报 `deviceCollision: true`，浮层那一行挂红标 —— **这是预期的**：对这一行点一次「换号」即彻底分离。
 ## 内核 ux-v38：Trae 多槽不再被自动 adopt 成同一个号（2026-11-22）
 
 用户反馈原话：*「我 trae 桌面平常只有一个号能登，好像登了一个号，另一个号就显示不可用了，刚刚两个号又都变成同一个号了」*。

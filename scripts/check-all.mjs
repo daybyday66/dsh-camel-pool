@@ -90,7 +90,7 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v38"', "内核版本标记已升 ux-v38");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v39"', "内核版本标记已升 ux-v39");
 // ux-v29：路由「莫名其妙掉了」的三处根因回归闸。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "deepseek-v4-flash-official", "Trae 兜底 id 进白名单（不再静默过滤）");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "export function routeModelDiagnostics", "路由掉线诊断函数在位");
@@ -155,6 +155,19 @@ mustContain(path.join(ROOT, "lib/client.js"), "const rebind = options !== undefi
 mustContain(path.join(ROOT, "lib/client.js"), "const sameAccountKeys = (() => {", "池浮层同号检测");
 mustContain(path.join(ROOT, "lib/client.js"), "sameAccountHint:", "同号时给出人话解释（中英各一份）");
 mustNotContain(path.join(ROOT, "lib/client.js"), "const wanted = String(channel.userId || '');\n\t\t\t\t\treturn {\n\t\t\t\t\t\tstart: () => postJson(path, { action: 'start' })", "重新登录不再无条件不传 expectUserId");
+// ux-v39：Trae 多槽设备身份隔离。ux-v38 只挡住了「自动 adopt 换号」，但两个槽仍可能
+// 共用同一个 deviceId —— 桌面端那把。共用设备号而账号不同时，谁先续期都把对方判成 20403，
+// 表现就是「路由莫名其妙掉」。这条链每一环缺了都会退回撞车态，逐环上闸。
+mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), "if (desktopDeviceId !== \"\" && local.deviceId === desktopDeviceId) return undefined;", "slotIdentity 不再复用桌面身份，撞车时强制新造");
+mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), "const conflictsWithDesktop = (doc, deviceId, desktop) => {", "撞车判定抽成单一函数（renew / status / 池文档共用）");
+mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), "deviceCollision = {", "keyMaterial 撞车时拒签并留下证据");
+mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), 'code: "device-collision"', "renew 遇撞车直接早退，不再拿桌面设备号签别人的链");
+mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), "写回会让桌面端拿到不属于它设备的 refreshToken", "writeBackToDesktop 拒绝把独立设备的 refreshToken 投毒桌面端");
+mustContain(path.join(ROOT, "lib/providers/trae/keepalive.js"), "deviceCollision: (() => {", "status() 透出撞车结论，面板才能解释为什么要换号");
+mustContain(path.join(ROOT, "lib/providers/trae/index.js"), "slotIdentity(doc, { deviceId: desktop.deviceId })", "登录侧只按设备号判撞车，不再按账号复用桌面身份");
+mustContain(path.join(ROOT, "lib/providers/trae/index.js"), "deviceCollision: (() => {", "池路由 identity 带撞车结论");
+mustContain(path.join(ROOT, "lib/client.js"), "r.identity.deviceCollision === true", "池浮层显示「撞设备号」告警");
+mustContain(path.join(ROOT, "lib/client.js"), "deviceCollisionHint:", "撞车提示给出可执行动作（中英各一份）");
 // ux-v19：池转发的兜底抓取必须是 directFetch，不能回落 globalThis.fetch。
 // billion-context 用 defineProperty 接管全局 fetch 并把自己重链到最外层，未声明
 // route.fetch 的路由（trae/trae2/qoder/workbuddy/bailian/qiniu）于是被它的
