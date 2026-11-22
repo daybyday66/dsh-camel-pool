@@ -3,6 +3,55 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 内核 ux-v38：Trae 多槽不再被自动 adopt 成同一个号（2026-11-22）
+
+用户反馈原话：*「我 trae 桌面平常只有一个号能登，好像登了一个号，另一个号就显示不可用了，刚刚两个号又都变成同一个号了」*。
+
+两件事分开看：**「桌面端只能登一个号」是上游限制**（`storage.json` 里只有一个 `iCubeAuthInfo://icube.cloudide` 条目，换号就是覆盖它）；**「两个号变成同一个号」是插件的 bug** —— 桌面端一换号，所有 Trae 槽位在 30 秒内被自动 adopt 统一成桌面端那个号。
+
+### 根因
+
+`lib/providers/trae/keepalive.js` 的 `tick()` 判出本槽 `localStale`（token 到期，或某轮读快照失败）时，无条件调 `adopt(false)`，而 `adopt()` 唯一的守卫是 `localUserId === userId && !newerThan(...)` —— **只拦同号**。本槽是小号、桌面端是主号时 `localUserId !== userId`，守卫直接放行，整份凭据（含 userId / account）被覆盖。
+
+比这更早的一层：`login.js` 本来就有账号守卫（`handleCallback` 里 `wantedUser !== arrivedUser` 直接作废这次登录），但前端 `loginSpec` 的 trae 分支 `postJson(path, { action: "start" })` **从来没传 `expectUserId`**，`session.userIdWanted` 永远是空 —— 守卫形同不存在。浏览器记着上一个号，用户点回原号也能登完，结果是静默覆盖另一个槽。
+
+实证：`~/.dsh/connect-auth/trae2.json` 的 `adoptedAt: 2026-11-22T08:02:09.209Z`、`adoptedFrom: ...\Trae CN\User\globalStorage\storage.json`；而 `trae2.json.adopted-main-2026-11-22T08-01-43-694Z` 备份里 `loggedInFrom: "browser-pkce"`，说明 trae2 本来是一次独立登录（虽然服务端回的 userId 与 trae 相同）。两条路由的余额逐个相同（1965.31 / 4900）。
+
+### 变更
+
+- **adopt 三档语义**（`lib/providers/trae/keepalive.js`）：本槽没有账号 → 放行（唯一合理的首次导入）；同号 → 交给 `newerThan` 续期；**异号 → 拒绝**，记 `adoptBlocked: { at, localUserId, desktopUserId }` 并 warn。要换号只能由人在面板里显式发起。`noteLogin()` 与成功 adopt 各自清空 `adoptBlocked`。
+- **`status()` 透出账号归属**（同上）：新增 `localUserId` / `localAccount` / `desktopUserId` / `adoptBlocked` 四个字段 —— 以前 `trae` 与 `trae2` 的 `account` 都显示「特依安」，界面上没有任何字段能证明它们是同一个号。
+- **池路由上报 identity**（`lib/providers/trae/index.js`）：`credits()` 的返回值加 `identity: { userId, account }`。
+- **池状态文档带出 identity**（`lib/shared/pool.js`）：`extractCredits()` 认出 `doc.identity` 对象，`creditsDoc` / `quotaDoc` 两支都带出去，`poolStatusDocument()` 写到每条路由的 `identity` 字段。**判重在界面，池内核不据此做路由决策。**
+- **面板透出 userId**（`lib/panel.js`）：`normalizeChannel()` 放行 `raw.userId`；`HUB_AUTH_ROUTE` GET 的每一行加 `userId` —— 前端登录要用它当 `expectUserId`，池浮层要用它判同号。
+- **前端登录带 expectUserId / 新增「换号」**（`lib/client.js`）：`loginSpec(channel, options)` 接受 `options.rebind`；trae 分支默认把 `channel.userId` 作为 `expectUserId` 传过去，`rebind === true` 时才不传。Trae 槽位行多一个「换号」按钮，`addBusy` 用 `login:` / `rebind:` 两个 key 区分。
+- **账号名不再是 deviceId**（同上）：trae 的 poll 以前用 `login.deviceId` 当账号名显示，现在读 `login.result.credential.account.username`（兜底 userId）—— 以前那串数字是设备 id，两行显示同一串字看起来就像「登上了同一个号」。
+- **同号告警**（同上）：池浮层算出 `sameAccountKeys`（同 kind + 同 `identity.userId` 且多余一条），命中的路由行挂红标「同号」，`title` 里写明是哪几条、userId 多少；槽位行显示 `账号名 · userId 后 6 位`。中英各补 5 个 i18n 键（`sameAccount` / `sameAccountHint` / `addRebind` / `addRebindHint` / `addKeepAccount`）。
+- **样式**：`.dcp-add__slot` 加 `flex-wrap: wrap`（Trae 行三个按钮，440px 浮层里挤不开）。
+- **内核标记**：`patch` 从 `ux-v36` 升到 `ux-v38`（ux-v37 是上一版池浮层「添加路由」）。
+
+### 自检
+
+- `npm run check` 全绿（check-all / check-imports / check-pool-core / check-hardening / check-qoder-vault）。新增 13 条 ux-v38 回归闸，逐环覆盖：`code: "other-account"` 换号保护、`adoptBlocked` 记录、`status()` 的 `localUserId` / `desktopUserId`、trae 路由的 `identity`、池文档的 `identity: credit?.identity`、面板的 `userId` 透出（两处）、前端 `expectUserId: wanted` 与 `rebind`、`sameAccountKeys` 与 `sameAccountHint`，外加一条 mustNotContain 防止「重新登录又不传 expectUserId」回潮。
+- 实测两槽现状：`GET /plugins/dsh-trae-connect/status` 与 `/2/status` 的 `userId` 都是 `2539239213373945`、`account` 都是「特依安」，只有 `expiresAt` 与 `deviceId` 不同 —— 这就是事故现场。修完后 `adopt` 不会再让第三个槽变成这个号；已有的两个同号槽需要人在面板里对其中一个点「换号」重新登一次（旧数据无法自动分离，插件不猜用户想留哪个）。
+## 内核 ux-v37：池浮层里直接添加路由，一键拉起浏览器登录（2026-11-22）
+
+用户原话：*「我想要就是那种在这个界面可以有直接的按钮，不是那么复杂的还要到设置界面才能加，有 workbuddy 的，trae 的还有 qoder 和 codearts 的，还有第三方 api 导入的，点一下对应路由下的『添加路由』的按钮，就会自动跳转到浏览器的登录界面……登录之后一次性就自动导入到积分池的路由里了」*。
+
+结论：**纯前端改动**。四家的登录端点本来就注册在每种 kind 的 `statusPath` 隔壁（workbuddy 的 `/login/start` + `/poll`、trae 的 `/login`、codearts 的 `/codearts-oauth`），前端直接打即可 —— 不新增宿主路由，所以不需要重启 DSH 就上线。
+
+### 变更
+
+- 池浮层「渠道路由」区标题栏右侧加「＋ 添加路由」按钮，展开后按平台分五张卡：WorkBuddy / Trae / CodeArts / Qoder / 第三方 API。
+- 数据源是 `/plugins/dsh-connect/auth`（注册表 + 凭据状态的唯一真相），**不自己猜有哪些槽位**。哪些槽位现在能登录，就看它有没有出现在池路由里 —— 池路由 = 活 runtime = 登录路由存在。
+- 已登录的槽位点「重新登录」，未登录的点「登录」；Qoder 没有浏览器登录，只能粘 `pt-` PAT 或从桌面 App 导入会话，卡片如实这么写；新建槽位回 `restartRequired: true` 并在界面提示重启。
+- 第三方 API 复用 ux-v36 的 `kind: "custom"`（渠道 ID / 上游地址 / 请求路径 / 模型清单 / API Key 五个输入）。
+- 中英各补 38 个 `add*` 文案键；新增 15 条 `.dcp-add*` 样式。
+
+### 自检
+
+- `npm run check` 全绿。实测四条登录路由：`POST /plugins/dsh-workbuddy-connect/1/login/start` 与 `/2/...` 都回 200 带 authUrl；`GET /plugins/dsh-trae-connect/login` 与 `/2/login` 都 200；`GET /plugins/dsh-pool/codearts-oauth` 200；qoder 走 PAT。
+- `workbuddy3` 在注册表里但进程无 runtime（`/3/login/start` 回 405、`/3/status` 回 404），因此它不会出现在「添加路由」的可登录列表里 —— 与「新槽位必须重启」的结论一致。
 ## 内核 ux-v36：面板直接添加任意 OpenAI 兼容路由（2026-11-21）
 
 用户提问原话：*「假如别人下载我这个插件之后，能在插件界面直接添加不同路由渠道吗，不能的话请你添加入口，我这暂时只支持 trae，workbuddy，qoder，codearts，阿里云百炼代金券，或者别的 api 路由」*。
