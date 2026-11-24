@@ -194,6 +194,7 @@ mustContain(AUTH_VENDOR, "await this.persist(next, mat.refreshToken);", "槽位�
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "function reportAlive(logger, text, warn) {", "保活结果有可观测性，失败不再无声");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "startCodeartsRefresh(intervalMs = 30 * 60 * 1000, keepAliveMs = 5 * 60 * 1000, logger)", "保活定时器接宿主 logger");
 mustNotContain(path.join(ROOT, "lib/providers/codearts/index.js"), "const aliveTick = function () { void store.keepAlive().catch(function () {}); };", "保活失败不再被空 catch 吞掉");
+mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "logPoolEvent({ ev: 'keepalive', kind: 'codearts'", "保活结果落 ~/.dsh/.pool-route.log，事后可查");
 // ux-v19：池转发的兜底抓取必须是 directFetch，不能回落 globalThis.fetch。
 // billion-context 用 defineProperty 接管全局 fetch 并把自己重链到最外层，未声明
 // route.fetch 的路由（trae/trae2/qoder/workbuddy/bailian/qiniu）于是被它的
