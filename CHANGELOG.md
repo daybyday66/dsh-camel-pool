@@ -3,6 +3,17 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 内核 ux-v41：续期成功的两种掉线通道（2026-11-24）
+
+ux-v40 修好了「失败一次就判死」，但 `refresh_token` 是**一次性轮换**的 —— 拿到了新 token 却没落盘，下场和续期失败一样：旧的那枚已作废，之后每次续期都是 `invalid_grant`，整个 family 判死。还剩两条这种通道：
+
+1. **槽位在等 STS 响应期间被 `invalidate()`。** `reloadFromDisk()`、`setPaused()`、`setPinned()`、`upsert()` 都会调它。`AccountSlot.refresh()` 里 `if (!stillCurrent()) return next;` 把刚拿到的新凭证直接丢掉，磁盘上留着仍然是旧 token。
+   - 现在改为补落盘，但带守卫：`persisterFor(id)` 增加可选参数 `expectRefreshToken`，只有文档里该账号的 `refresh_token` 仍等于本次消费的那一枚时才写。用户刚重新登录换了新链时守卫不成立，绝不覆盖。
+2. **保活失败完全静默。** `startCodeartsRefresh()` 的 `aliveTick` 是 `void store.keepAlive().catch(function () {})`，`.pool-route.log` 里连一条 stale 都没有，用户说「又掉了」时只能靠猜。
+   - 现在 `startCodeartsRefresh(intervalMs, keepAliveMs, logger)` 接宿主 logger，把 `{ checked, refreshed, needsLogin }` 和每个槽位最近一次的 `lastRefreshError` 写进日志；`reportAlive()` 做同文去重，避免 5 分钟一条刷屏。
+   - `lib/providers/pool/index.js` 的调用改为 `startCodeartsRefresh(undefined, undefined, ctx.logger)`。
+
+自检：`npm run check` 全绿，新增 5 条 ux-v41 回归闸（落库守卫、轮换后补落盘、`reportAlive` 在位、logger 已接、旧空 catch 必须消失）。
 ## 内核 ux-v40：CodeArts 续期不再「失败一次就判死」（2026-11-24）
 
 用户反馈原话：*「我的华为的codearts号为什么总是掉，总是要重复登录」*。
