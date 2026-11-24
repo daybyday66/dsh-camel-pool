@@ -90,7 +90,7 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v39"', "内核版本标记已升 ux-v39");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v40"', "内核版本标记已升 ux-v40");
 // ux-v29：路由「莫名其妙掉了」的三处根因回归闸。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "deepseek-v4-flash-official", "Trae 兜底 id 进白名单（不再静默过滤）");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "export function routeModelDiagnostics", "路由掉线诊断函数在位");
@@ -168,6 +168,21 @@ mustContain(path.join(ROOT, "lib/providers/trae/index.js"), "slotIdentity(doc, {
 mustContain(path.join(ROOT, "lib/providers/trae/index.js"), "deviceCollision: (() => {", "池路由 identity 带撞车结论");
 mustContain(path.join(ROOT, "lib/client.js"), "r.identity.deviceCollision === true", "池浮层显示「撞设备号」告警");
 mustContain(path.join(ROOT, "lib/client.js"), "deviceCollisionHint:", "撞车提示给出可执行动作（中英各一份）");
+// ux-v40：CodeArts 反复掉线。三条真 bug 各有独立现场证据，逐条上闸，缺一条就退回「总是掉」。
+// ① 续期 POST 没有超时 → 一次挂住就让 _inflight 永久占位，该号在进程存活期内再也不会续期；
+// ② catch 一律标 stale 落盘 → 一次网络抖动就把号判成「必须重新登录」；
+// ③ 先落盘再更新内存 → 写盘抛错会丢掉上游刚轮换出的 refresh_token，之后每次续期都是 invalid_grant。
+const AUTH_VENDOR = path.join(ROOT, "lib/providers/codearts/vendor/auth-CF9XHMX-.mjs");
+mustContain(AUTH_VENDOR, "const REFRESH_TIMEOUT_MS = 25e3;", "续期请求带硬超时（否则 _inflight 会被永久占死）");
+mustContain(AUTH_VENDOR, "function isDefinitiveRefreshRejection(text) {", "续期失败区分「上游明确拒绝」与「链路问题」");
+mustContain(AUTH_VENDOR, "invalid_grant|invalid_token|invalid_request|InvalidDPoPHeader|use_dpop_nonce", "明确拒绝的判定覆盖 invalid_grant 家族");
+mustContain(AUTH_VENDOR, "AbortSignal.timeout(REFRESH_TIMEOUT_MS)), cred.label);", "两处 refresh() 都把超时信号传给 refreshToken");
+mustNotContain(AUTH_VENDOR, "\t\t} catch {\n\t\t\tcred.stale = true;", "续期 catch 不再无条件标 stale");
+mustContain(AUTH_VENDOR, "if (!isDefinitiveRefreshRejection(text)) {", "只有明确拒绝才走 stale 分支");
+mustContain(AUTH_VENDOR, "this._cred = next;\n\t\t\t\tthis._refreshFailedAt = void 0;", "AccountSlot 先落内存再落盘，写盘失败不丢新 token");
+mustContain(AUTH_VENDOR, "if (cred.stale !== true && this._refreshFailedAt !== void 0 && Date.now() - this._refreshFailedAt < REFRESH_RETRY_GAP_MS) return cred;", "非 stale 失败留最短重试间隔，不乱撞一次性 refreshToken");
+mustContain(AUTH_VENDOR, "const error = this._slots.get(id)?.lastRefreshError;", "账号摘要透出最近一次续期失败原因");
+mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "refreshError: str(a.refreshError).slice(0, 200)", "状态接口把续期失败原因带给面板");
 // ux-v19：池转发的兜底抓取必须是 directFetch，不能回落 globalThis.fetch。
 // billion-context 用 defineProperty 接管全局 fetch 并把自己重链到最外层，未声明
 // route.fetch 的路由（trae/trae2/qoder/workbuddy/bailian/qiniu）于是被它的

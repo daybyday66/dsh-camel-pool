@@ -3,6 +3,36 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 内核 ux-v40：CodeArts 续期不再「失败一次就判死」（2026-11-24）
+
+用户反馈原话：*「我的华为的codearts号为什么总是掉，总是要重复登录」*。
+
+华为签发的 token 固定 2 小时有效，插件已经有一套完整的保活链路：`startCodeartsRefresh()` 每 5 分钟调 `store.keepAlive()`，`REFRESH_SKEW_MS = 18e5` 提前 30 分钟续，`STALE_RETRY_MS = 3e5` 给 stale 号留 5 分钟冷却。链路本身是对的，但三个缺陷会让它在关键时刻静默失效。
+
+### 根因
+
+1. **续期 POST 没有超时**。`refreshToken(cfg, prev, abort)` 的 `abort` 由调用方传，而 `CodeArtsCredentialStore.refresh()` 与 `AccountSlot.refresh()` 两处都没传。`directFetch` 的 agent 只设了 `connect.timeout`，没有整体响应超时 —— STS 接了连接却不回时，那个 promise 永远不 settle，`this._inflight` 上挂的 `.finally` 永远不跑，`_inflight` 就永久占位。之后每一轮 `ensureFresh()` 都拿到同一个挂起 promise，这个号在进程存活期间**再也不会续期**，2 小时后 token 到期。表现就是「CodeArts 又掉了」，而重启 DSH 立刻好。
+2. **任何失败都把 `stale = true` 落盘**。`catch { cred.stale = true; ... persist(cred) }` 不区分「上游明确拒绝」与「链路抖动」。一次 ECONNRESET、一次超时、一次本地代理半开，就把账号判成「必须重新登录」写进磁盘，之后每轮 `keepAlive` 都跳过它 —— 用户只能手动重登。
+3. **先落盘再更新内存**。`await persist(next)` 抛错会直接进 catch，而 `next`（上游已经轮换出来的新 `refresh_token`）就此丢失，磁盘上留着的是刚被作废的旧那份。`refresh_token` 一次性且有 reuse 检测，之后每次续期都是 `invalid_grant`，只能重登。
+
+现场证据：`~/.dsh/.codearts-accounts.json.bak-1794726787427`（2026-11-14 20:00）里 `stale: true`，而它的 `refreshToken` JWT 里 `counter` 已经是 **15** —— 说明自动续期正常工作了 15 次，是第 16 次失败把号写死。
+
+### 变更（`lib/providers/codearts/vendor/auth-CF9XHMX-.mjs`）
+
+1. 新增 `const REFRESH_TIMEOUT_MS = 25e3;`，两处 `refresh()` 都给 `refreshToken()` 传 `AbortSignal.timeout(REFRESH_TIMEOUT_MS)` —— `_inflight` 一定会在 25 秒内被清掉。
+2. 新增 `refreshFailureText(error)` 与 `isDefinitiveRefreshRejection(text)`：只有 `refresh token failed: 400/401/403` 或 `invalid_grant` / `invalid_token` / `invalid_request` / `InvalidDPoPHeader` / `use_dpop_nonce` 才判「上游明确拒绝」。
+3. 两处 `catch` 改为分流：明确拒绝 → 标 `stale` 并落盘（照旧）；链路问题 → 保留凭据、不标 `stale`、只记 `lastRefreshError` 与 `_refreshFailedAt`。
+4. 新增 `const REFRESH_RETRY_GAP_MS = 2e4;`，`AccountSlot.forceRefresh()` 对**非 stale** 的失败留 20 秒最短重试间隔：`refresh_token` 一次性，请求停在「已送达、响应没回来」时立刻重试就是拿废 token 撞 `invalid_grant`，会把整个 token family 判死。stale 号仍走 `_retryStale()` 的 5 分钟冷却。
+5. 成功分支改为**先 `this._cred = next` 再 `persist(next)`**；写盘失败只记 `lastRefreshError` 并返回 `next`，既不丢新 token 也不回头标 `stale`。
+6. `AccountSlot` 新增字段 `_refreshFailedAt` 与 `lastRefreshError`。
+7. `CodeArtsAccountStore.list()` 把 `slot.lastRefreshError` 合并进账号摘要（`refreshError` 字段，仅在有值时出现）。
+8. `lib/providers/codearts/index.js` 的 `codeartsAuthStatus()` 把 `refreshError` 透到 `accounts[]`（截 200 字），面板能说清「这次为什么没续上」。
+9. `lib/providers/pool/index.js` 内核标记升 `ux-v40`。
+
+### 自检
+
+- `npm run check` 全绿（check-all / check-imports / check-pool-core / check-hardening / check-qoder-vault）。
+- `scripts/check-all.mjs` 追加 9 条 ux-v40 回归闸：超时常量、分类器、两处超时传入、catch 不再无条件标 stale、`_refreshFailedAt` 清空、重试间隔、`refreshError` 透出两处。
 ## 内核 ux-v39：Trae 多槽设备身份隔离，谁续期都不再顶掉别人（2026-11-22）
 
 用户反馈原话：*「不管桌面端如何，反正就是能不能保证我这些路由在登录不同的两个号到插件里时间不会莫名其妙掉」*。
