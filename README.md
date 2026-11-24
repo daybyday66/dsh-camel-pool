@@ -274,6 +274,17 @@ ux-v40 的改法：
 
 历史证据：`.codearts-accounts.json.bak-1794726787427`（2026-11-14）里 `stale: true` 而 `refreshToken` 的 `counter` 已经是 **15** —— 自动续期实实在在跑通了 15 次，是第 16 次失败把号写死成「必须重新登录」。
 
+#### 还有两条「续期成功了却照样掉」（ux-v41）
+
+`refresh_token` 是**一次性**的：每次续期上游都会把旧的那枚作废、发一枚新的。所以「拿到了新 token 却没写回磁盘」和「续期失败」是同一个下场 —— 之后每次续期都是 `invalid_grant`，整个 token family 判死。ux-v40 之后还剩两条这种通道：
+
+| 通道 | 触发 | 修法 |
+| --- | --- | --- |
+| 槽位在等 STS 响应期间被 `invalidate()`（重读磁盘、暂停、置顶、重新登录都走它） | `refresh()` 的 `stillCurrent()` 为假 → 刚拿到的新凭证被 `return next` 直接丢弃，磁盘还是已作废的旧 token | 这种情况仍尝试补落盘，但带守卫：**只有文档里该账号的 `refresh_token` 还是本次消费的那一枚**才写；用户刚重登换了新链时守卫不成立，绝不覆盖 |
+| 保活失败被静默吞掉 | `void store.keepAlive().catch(function () {})` | 把 `{ checked, refreshed, needsLogin }` 与各槽位 `lastRefreshError` 原文写进宿主日志，同一句话只打一次 |
+
+一句话总结现在的行为：**只要这台机器上还有一份没被判死的 `refresh_token`（活 30 天），插件就会自己续下去**；真正需要重新登录只剩三种情况 —— 上游明确判死（`invalid_grant` / `InvalidDPoPHeader`）、账号被上游吊销、或者 DSH 连续关闭超过 30 天把 `refresh_token` 也放凉了。
+
 ---
 ## 后续：添加更多渠道以扩充模型选择
 
