@@ -250,6 +250,30 @@ ux-v39 改成**一律用本槽自己的身份**：
 
 **撞车槽的自愈方式**：在池浮层对这一行点「换号」，用浏览器登一次。PKCE 登录会生成一套全新的 `deviceId` + 密钥对（`credentialFromLogin`），本槽从此与桌面端再无交集。
 
+### 自动续期不再「掉一次就废」：CodeArts 的三条加固（ux-v40）
+
+用户反馈原话：*「我的华为的codearts号为什么总是掉，总是要重复登录」*。
+
+华为签发的 token 有效期是**固定 2 小时**（不会因为一直在用而顺延），插件靠 `refresh_token` 每 5 分钟保活、到期前 30 分钟续。链路上有三处会让这条保活静默失效：
+
+| 缺陷 | 现场 | 后果 |
+| --- | --- | --- |
+| 续期 POST **没有超时** | `refreshToken()` 的 `abort` 由调用方传，而两处 `refresh()` 都没传 | STS 接了连接不回时那个 promise 永不 settle，`_inflight` 永久占位 → 该号在进程存活期内**再也不会续期**，2 小时后必掉，重启 DSH 才好 |
+| 失败一律标 `stale` 落盘 | `catch { cred.stale = true; persist(...) }` 不区分原因 | 一次 ECONNRESET / 超时就把号判成「必须重新登录」，写进磁盘后每轮 `keepAlive` 都跳过它 |
+| 先落盘再更新内存 | `await persist(next)` 抛错会进 catch | 上游已轮换出的新 `refresh_token` 被丢掉，磁盘上留着已作废的旧那份 → 之后每次续期都是 `invalid_grant`（一次性 + reuse 检测） |
+
+ux-v40 的改法：
+
+| 位置 | 行为 |
+| --- | --- |
+| `REFRESH_TIMEOUT_MS = 25e3` | 续期请求带 `AbortSignal.timeout`，挂住 25 秒就失败返回，`_inflight` 一定会被 `.finally` 清掉。 |
+| `isDefinitiveRefreshRejection()` | 只有 `refresh token failed: 400/401/403` 或 `invalid_grant` / `invalid_token` / `InvalidDPoPHeader` 家族才标 `stale`。超时、ECONNRESET、代理半开这类**保留凭据**，下一轮保活自己会活过来。 |
+| `_refreshFailedAt` + `REFRESH_RETRY_GAP_MS = 2e4` | 非 stale 失败后 20 秒内不重撞：`refresh_token` 一次性，请求停在「已送达、响应没回来」时立刻重试就是拿废 token 撞 `invalid_grant`，会把整个 token family 判死。 |
+| 先 `this._cred = next` 再 `persist(next)` | 写盘失败只记 `lastRefreshError`，**不丢**上游刚轮换出的新 token，也不回头标 `stale`。 |
+| `lastRefreshError` → `store.list()` → `codeartsAuthStatus().accounts[].refreshError` | 面板能说清「这次为什么没续上」，而不是只显示一个 stale 红标。 |
+
+历史证据：`.codearts-accounts.json.bak-1794726787427`（2026-11-14）里 `stale: true` 而 `refreshToken` 的 `counter` 已经是 **15** —— 自动续期实实在在跑通了 15 次，是第 16 次失败把号写死成「必须重新登录」。
+
 ---
 ## 后续：添加更多渠道以扩充模型选择
 
