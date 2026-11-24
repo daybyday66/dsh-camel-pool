@@ -90,7 +90,7 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v40"', "内核版本标记已升 ux-v40");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v41"', "内核版本标记已升 ux-v41");
 // ux-v29：路由「莫名其妙掉了」的三处根因回归闸。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "deepseek-v4-flash-official", "Trae 兜底 id 进白名单（不再静默过滤）");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "export function routeModelDiagnostics", "路由掉线诊断函数在位");
@@ -183,6 +183,17 @@ mustContain(AUTH_VENDOR, "this._cred = next;\n\t\t\t\tthis._refreshFailedAt = vo
 mustContain(AUTH_VENDOR, "if (cred.stale !== true && this._refreshFailedAt !== void 0 && Date.now() - this._refreshFailedAt < REFRESH_RETRY_GAP_MS) return cred;", "非 stale 失败留最短重试间隔，不乱撞一次性 refreshToken");
 mustContain(AUTH_VENDOR, "const error = this._slots.get(id)?.lastRefreshError;", "账号摘要透出最近一次续期失败原因");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "refreshError: str(a.refreshError).slice(0, 200)", "状态接口把续期失败原因带给面板");
+// ux-v41：ux-v40 之后仍剩下的两条「续期成功却掉线」通道。
+// ① 续期 POST 已让上游轮换掉那枚一次性 refresh_token，但槽位在等响应期间被
+//    invalidate()（重读磁盘 / 暂停 / 置顶 / 重登）→ stillCurrent() 为假 → 结果被直接
+//    丢弃，磁盘还留着已作废的旧 token → 之后每次续期都是 invalid_grant，整个 family 判死。
+// ② 保活用 `void store.keepAlive().catch(function () {})` 静默吞掉一切失败，日志里
+//    连一条 stale 都没有，用户说「又掉了」时无从查证。
+mustContain(AUTH_VENDOR, "if (typeof expectRefreshToken === \"string\" && expectRefreshToken !== \"\") {", "落库支持「文档里仍是本次消费的那一枚」守卫");
+mustContain(AUTH_VENDOR, "await this.persist(next, mat.refreshToken);", "槽位被 invalidate 后仍把轮换结果补落盘");
+mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "function reportAlive(logger, text, warn) {", "保活结果有可观测性，失败不再无声");
+mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "startCodeartsRefresh(intervalMs = 30 * 60 * 1000, keepAliveMs = 5 * 60 * 1000, logger)", "保活定时器接宿主 logger");
+mustNotContain(path.join(ROOT, "lib/providers/codearts/index.js"), "const aliveTick = function () { void store.keepAlive().catch(function () {}); };", "保活失败不再被空 catch 吞掉");
 // ux-v19：池转发的兜底抓取必须是 directFetch，不能回落 globalThis.fetch。
 // billion-context 用 defineProperty 接管全局 fetch 并把自己重链到最外层，未声明
 // route.fetch 的路由（trae/trae2/qoder/workbuddy/bailian/qiniu）于是被它的
