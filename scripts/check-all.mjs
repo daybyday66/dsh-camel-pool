@@ -90,7 +90,27 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v41"', "内核版本标记已升 ux-v41");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v44"', "内核版本标记已升 ux-v44");
+// ux-v42：latch 让位条件必须是两级排序（当日桶 + 更早到期），不能退回只看 expiring 的窄条件。
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "function ranksBefore", "两级排序比较器在位（ranksBefore）");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "!burnsToday && !ranksBefore(head, ordered[at])", "latch 让位同时看当日桶与更早到期");
+// ux-v43：直连通道必须自带非 undici 的 User-Agent。实测 Trae 网关把 undici / curl /
+// Go-http-client / python-requests / 空 UA 一律判成裸客户端回 4011（伪装成限流），
+// undici.fetch 默认 UA 就是 "undici" —— 缺这两条，trae/trae2 会重新 100% 502。
+mustContain(path.join(ROOT, "lib/shared/net-rescue.js"), "const DEFAULT_USER_AGENT =", "直连通道有默认 UA");
+mustContain(path.join(ROOT, "lib/shared/net-rescue.js"), "const options = withDefaultUserAgent(input, raw);", "directFetch 两条分支前先补默认 UA");
+mustContain(path.join(ROOT, "lib/shared/net-rescue.js"), 'if (headers["user-agent"] === undefined || headers["user-agent"] === "") headers["user-agent"] = DEFAULT_USER_AGENT;', "裸 node:https 分支也补默认 UA");
+// ux-v44：Trae 签到设备号与会话 deviceId 分离。撞设备门换号、换号只动签到台账、
+// 「code 0 不等于到账」必须比余额；缺任一条，同机两号会互相顶掉签到额度。
+mustContain(path.join(ROOT, "lib/providers/trae/index.js"), 'import { createCheckinDevices } from "./checkin-device.js";', "Trae 侧接入签到设备号台账");
+mustContain(path.join(ROOT, "lib/providers/trae/index.js"), "const CHECKIN_DEVICE_GATE_CODES = new Set([9074, 9095]);", "设备门业务码在位（9074/9095）");
+mustContain(path.join(ROOT, "lib/providers/trae/index.js"), "deviceId = checkinDevices.rotate(accountKey, deviceId);", "撞设备门后换号重试");
+mustContain(path.join(ROOT, "lib/providers/trae/index.js"), "const credited = Math.round((remainAfter - remainBefore) * 100) / 100;", "领取后比余额增量（code 0 不等于到账）");
+mustContain(path.join(ROOT, "lib/providers/trae/index.js"), "credited === 0", "余额没涨时标注而不是假报成功");
+mustContain(path.join(ROOT, "lib/providers/trae/checkin-device.js"), "export function createCheckinDevices", "签到设备号台账模块在位");
+mustContain(path.join(ROOT, "lib/providers/trae/checkin-device.js"), "renameSync(tmp, file);", "签到台账原子写");
+mustContain(path.join(ROOT, "lib/panel.js"), ".codearts-accounts.json", "渠道页认出 codearts 多账号台账");
+
 // ux-v29：路由「莫名其妙掉了」的三处根因回归闸。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "deepseek-v4-flash-official", "Trae 兜底 id 进白名单（不再静默过滤）");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "export function routeModelDiagnostics", "路由掉线诊断函数在位");

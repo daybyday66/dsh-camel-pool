@@ -73,6 +73,10 @@ function mustContain(rel, needle, label) {
 
 // ③ 落盘 / 并发 / 路由锚点
 mustContain("lib/shared/net-rescue.js", "typeof existing === \"string\" || existing === true", "fetch 兜底幂等兼容字符串/旧布尔");
+// ux-v43：直连通道的自定义 UA 不能在「分叉」之后才补 —— undici 那条会自己塞 "undici"，
+// 裸 node:https 那条干脆不发；两条都实测被 Trae 网关回 4011。
+mustContain("lib/shared/net-rescue.js", "const DEFAULT_USER_AGENT =", "直连通道默认 UA 在位");
+mustContain("lib/shared/net-rescue.js", "withDefaultUserAgent(input, raw)", "directFetch 分叉前补默认 UA");
 mustContain("lib/shared/usage.js", "function scheduleFlushRetry(fails)", "账本落盘失败重试");
 mustContain("lib/shared/usage.js", "function stampMs(at)", "无时区时间戳按 Asia/Shanghai 解释");
 mustContain("lib/shared/usage.js", "suspect: true", "异常积分跳变保留基线");

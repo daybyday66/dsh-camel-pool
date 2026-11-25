@@ -2,7 +2,7 @@
   "name": "dsh-camel-pool",
   "displayName": "驼峰积分池 (Camel Pool)",
   "description": "独立的驼峰积分池插件：从渠道中心整包独立出来，自带积分池剩余额度显示面板、自动签到、按额度智能路由（402/429 自动切换），并可持续注册更多渠道以扩充模型选择。",
-  "version": "1.0.8",
+  "version": "1.0.10",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/daybyday66/dsh-camel-pool.git"
@@ -29,7 +29,7 @@
   },
   "main": "lib/index.js",
   "scripts": {
-    "check": "node scripts/check-all.mjs && node scripts/check-imports.mjs && node scripts/check-pool-core.mjs && node scripts/check-hardening.mjs && node scripts/check-qoder-vault.mjs",
+    "check": "node scripts/check-all.mjs && node scripts/check-imports.mjs && node scripts/check-pool-core.mjs && node scripts/check-hardening.mjs && node scripts/check-qoder-vault.mjs && node scripts/check-checkin-device.mjs",
     "check:syntax": "node scripts/check-all.mjs",
     "check:imports": "node scripts/check-imports.mjs && node scripts/check-imports.mjs --selftest",
     "check:core": "node scripts/check-pool-core.mjs",

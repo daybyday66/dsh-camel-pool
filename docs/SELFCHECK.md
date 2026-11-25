@@ -33,9 +33,21 @@
   ② 跨模块裸调用：某名字在别的 `lib/` 文件里有声明，本文件没 import 也没声明却直接调
   ——「抄了逻辑没抄助手」（P3-11）。`--selftest` 把这两起真实事故在内存里复原，必须抓回来
   且干净树零误报；
-- `scripts/check-pool-core.mjs` —— 真 import 真跑的 12 项池内核断言
-  （当日桶排队、latch 让位、`expiring=0` 不误判、状态字段透出、`only` 只刷指定路由）。
+- `scripts/check-pool-core.mjs` —— 真 import 真跑的 39 项池内核断言
+  （当日桶排队、latch 让位给当日桶、latch 不得越过更早到期的路由、同档粘性仍生效、
+  真实形状回归（11-30 的 trae 必须排在 12-05 的 wb2 之前）、`expiring=0` 不误判、
+  状态字段透出、`only` 只刷指定路由）。
   静态断言抓不住 `??` 写成 `||` 这类改动，所以运行时那一层不能省。
+- `scripts/check-hardening.mjs` 的 ux-v43 两条闸锁的是「直连通道必须自带非 undici 的 UA」：
+  `const DEFAULT_USER_AGENT =` 必须在位、`withDefaultUserAgent(input, raw)` 必须在 `directFetch`
+  的 undici/raw 分叉**之前**。缺任一条，undici.fetch 会自己塞 `UA: undici`，Trae 网关按裸客户端
+  回 4011（伪装成限流），trae/trae2 重新 100% 502 —— 这类回归在普通单测里完全看不出来。
+
+- `scripts/check-checkin-device.mjs` —— 真实 import + 临时台账跑的 12 项 Trae 签到设备号断言
+  （首次 get 登记 fallback 落盘、已有值不覆盖、两账号隔离、rotate 换号/落盘/不动他人、
+  不与已有号重复、连续 rotate 不重号、空 key 直通不写表、坏台账当空表重建、无 tmp 残留、
+  0600 权限）。`@deepseek-ai/dsh-home-paths` 在独立 node 下解析不到时自动注册 resolve 钩子
+  替身，被测 get/rotate 只碰 node:fs 与 node:crypto，不调用宿主 API。
 
 只想跑一部分时用 `npm run check:syntax` / `npm run check:imports` / `npm run check:core`。
 
