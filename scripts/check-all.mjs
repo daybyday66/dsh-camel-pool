@@ -90,7 +90,7 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v47"', "内核版本标记已升 ux-v47");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v48"', "内核版本标记已升 ux-v48");
 // ux-v42：latch 让位条件必须是两级排序（当日桶 + 更早到期），不能退回只看 expiring 的窄条件。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "function ranksBefore", "两级排序比较器在位（ranksBefore）");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "!burnsToday && !balanceAnchors.has(head.routeKey) && !ranksBefore(head, ordered[at])", "latch 让位同时看当日桶、均衡锚点与更早到期");
@@ -126,6 +126,12 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "gap > CREDIT_BALANCE_GAP", "
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "!balanceAnchors.has(head.routeKey)", "latch 不得越过均衡锚点");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "balance: creditBalanceReport()", "状态接口透出当前燃烧目标");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "balanceCurrent.set(balanceTierKeyOf(latchEntry.route, latchCredit), latch)", "latch 播种均衡记忆");
+// ux-v48：未换手档也要出现在报告里，且粘性不得越过同档已被均衡换手的锚点（3+ 路由档）。
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "tiers.set(tierKey, current)", "均衡返回 tier->首选映射");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "balancedElsewhere", "本档已换手时粘性不抬升");
+mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v48 未换手的档也在 balance 报告里", "ux-v48 观测补齐断言在位");
+mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v48 差值恰好=300 严格不切", "ux-v48 滞回上沿边界断言");
+mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v48 latch 播种 A 后 B 多>300 切走 B", "ux-v48 latch+均衡联动断言");
 
 // ux-v29：路由「莫名其妙掉了」的三处根因回归闸。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "deepseek-v4-flash-official", "Trae 兜底 id 进白名单（不再静默过滤）");

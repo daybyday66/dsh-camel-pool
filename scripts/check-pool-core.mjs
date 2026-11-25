@@ -320,6 +320,89 @@ await refreshPoolCredits({ force: true, only: ["bal-b"] });
 ok("ux-v47 差 3500 再次换到 bal-b", balOrder().join(",") === "bal-b,bal-a", balOrder());
 const balOff = orderedRoutesFor(MODEL, { balanceCredits: false }).map((item) => item.routeKey).filter((key) => key.startsWith("bal-"));
 ok("ux-v47 可关闭均衡（balanceCredits:false 回纯注册序）", balOff.join(",") === "bal-a,bal-b", balOff);
+
+// ---- ux-v48：report 观测补齐 + 边界加固（Muse 复核建议） ----
+// ① 没换过手的档也要出现在 creditBalanceReport（ux-v48 修复点）
+const repA = { doc: { status: "signed-in", credits: { remaining: 2000, total: 4000, endTime: BAL_END } } };
+const repB = { doc: { status: "signed-in", credits: { remaining: 1800, total: 4000, endTime: BAL_END } } };
+const releaseRepA = registerPoolRoute(fakeBalanceRoute("rep-a", 1, "bal-report", repA));
+const releaseRepB = registerPoolRoute(fakeBalanceRoute("rep-b", 1, "bal-report", repB));
+await refreshPoolCredits({ force: true, only: ["rep-a", "rep-b"] });
+const repKeys = () => orderedRoutesFor(MODEL, {}).map((i) => i.routeKey).filter((k) => k.startsWith("rep-"));
+const repOrder = repKeys();
+ok("ux-v48 未换手的档也在 balance 报告里", creditBalanceReport().some((i) => i.routeKey === "rep-a"), creditBalanceReport());
+ok("ux-v48 差值 200 ≤300 不换手，保持注册序", repOrder.join(",") === "rep-a,rep-b", repOrder);
+
+// ② 差值恰好 =300 严格不切（滞回上沿，gap > 300 才切）
+const exA = { doc: { status: "signed-in", credits: { remaining: 1700, total: 4000, endTime: BAL_END } } };
+const exB = { doc: { status: "signed-in", credits: { remaining: 2000, total: 4000, endTime: BAL_END } } };
+const releaseExA = registerPoolRoute(fakeBalanceRoute("ex-a", 1, "bal-exact", exA));
+const releaseExB = registerPoolRoute(fakeBalanceRoute("ex-b", 1, "bal-exact", exB));
+await refreshPoolCredits({ force: true, only: ["ex-a", "ex-b"] });
+const exKeys = orderedRoutesFor(MODEL, {}).map((i) => i.routeKey).filter((k) => k.startsWith("ex-"));
+ok("ux-v48 差值恰好=300 严格不切", exKeys.join(",") === "ex-a,ex-b", exKeys);
+releaseExA(); releaseExB();
+
+// ③ 3 路由档：换手后其余保持相对注册序
+const triA = { doc: { status: "signed-in", credits: { remaining: 1000, total: 4000, endTime: BAL_END } } };
+const triB = { doc: { status: "signed-in", credits: { remaining: 1000, total: 4000, endTime: BAL_END } } };
+const triC = { doc: { status: "signed-in", credits: { remaining: 5000, total: 4000, endTime: BAL_END } } };
+const releaseTriA = registerPoolRoute(fakeBalanceRoute("tri-a", 1, "bal-tri", triA));
+const releaseTriB = registerPoolRoute(fakeBalanceRoute("tri-b", 1, "bal-tri", triB));
+const releaseTriC = registerPoolRoute(fakeBalanceRoute("tri-c", 1, "bal-tri", triC));
+await refreshPoolCredits({ force: true, only: ["tri-a", "tri-b", "tri-c"] });
+const triKeys = orderedRoutesFor(MODEL, {}).map((i) => i.routeKey).filter((k) => k.startsWith("tri-"));
+ok("ux-v48 3 路由档换手后其余保序", triKeys.join(",") === "tri-c,tri-a,tri-b", triKeys);
+releaseTriA(); releaseTriB(); releaseTriC();
+
+// ④ expiry 不同 / priority 不同 → 分属不同档，不互相均衡（保持注册序）
+const dA = { doc: { status: "signed-in", credits: { remaining: 100, total: 4000, endTime: BAL_END } } };
+const dB = { doc: { status: "signed-in", credits: { remaining: 9000, total: 4000, endTime: "2026-12-21T00:00:00.000Z" } } };
+const releaseDA = registerPoolRoute(fakeBalanceRoute("diff-a", 1, "bal-diff", dA));
+const releaseDB = registerPoolRoute(fakeBalanceRoute("diff-b", 1, "bal-diff", dB));
+await refreshPoolCredits({ force: true, only: ["diff-a", "diff-b"] });
+const diffExp = orderedRoutesFor(MODEL, {}).map((i) => i.routeKey).filter((k) => k.startsWith("diff-"));
+ok("ux-v48 expiry 不同不混算（保持注册序）", diffExp.join(",") === "diff-a,diff-b", diffExp);
+releaseDA(); releaseDB();
+const pA = { doc: { status: "signed-in", credits: { remaining: 100, total: 4000, endTime: BAL_END } } };
+const pB = { doc: { status: "signed-in", credits: { remaining: 9000, total: 4000, endTime: BAL_END } } };
+const releasePA = registerPoolRoute(fakeBalanceRoute("prio-a", 1, "bal-prio", pA));
+const releasePB = registerPoolRoute(fakeBalanceRoute("prio-b", 2, "bal-prio", pB));
+await refreshPoolCredits({ force: true, only: ["prio-a", "prio-b"] });
+const diffPri = orderedRoutesFor(MODEL, {}).map((i) => i.routeKey).filter((k) => k.startsWith("prio-"));
+ok("ux-v48 priority 不同不混算（保持注册序）", diffPri.join(",") === "prio-a,prio-b", diffPri);
+releasePA(); releasePB();
+
+// ⑤ 块内余额非有限 → 整块跳过不猜，保持注册序
+const nfA = { doc: { status: "signed-in", credits: { remaining: 1000, total: 4000, endTime: BAL_END } } };
+const nfB = { doc: { status: "signed-out" } }; // 无 credits.remaining
+const releaseNfA = registerPoolRoute(fakeBalanceRoute("nf-a", 1, "bal-nf", nfA));
+const releaseNfB = registerPoolRoute(fakeBalanceRoute("nf-b", 1, "bal-nf", nfB));
+await refreshPoolCredits({ force: true, only: ["nf-a", "nf-b"] });
+const nfKeys = orderedRoutesFor(MODEL, {}).map((i) => i.routeKey).filter((k) => k.startsWith("nf-"));
+ok("ux-v48 块内余额非有限整块跳过", nfKeys.join(",") === "nf-a,nf-b", nfKeys);
+releaseNfA(); releaseNfB();
+
+// ⑥ latch + 均衡联动：latch 播种 A，B 多 >300 切走 B，下一轮不再切回
+const lkA = { doc: { status: "signed-in", credits: { remaining: 1000, total: 4000, endTime: BAL_END } } };
+const lkB = { doc: { status: "signed-in", credits: { remaining: 2000, total: 4000, endTime: BAL_END } } };
+const releaseLkA = registerPoolRoute(fakeBalanceRoute("lk-a", 1, "bal-lk", lkA));
+const releaseLkB = registerPoolRoute(fakeBalanceRoute("lk-b", 1, "bal-lk", lkB));
+await refreshPoolCredits({ force: true, only: ["lk-a", "lk-b"] });
+setLatch(MODEL, "lk-a");
+const lk1 = orderedRoutesFor(MODEL, {}).map((i) => i.routeKey).filter((k) => k.startsWith("lk-"));
+ok("ux-v48 latch 播种 A 后 B 多>300 切走 B", lk1[0] === "lk-b", lk1);
+const lk2 = orderedRoutesFor(MODEL, {}).map((i) => i.routeKey).filter((k) => k.startsWith("lk-"));
+ok("ux-v48 切到 B 后下一轮不切回（滞回收敛）", lk2[0] === "lk-b", lk2);
+releaseLkA(); releaseLkB();
+
+// ⑦ unregisterPoolRoute 清掉该档的均衡记忆
+const repAfter = creditBalanceReport().filter((i) => i.routeKey === "rep-a");
+ok("ux-v48 注销当前首选后该档从报告消失", repAfter.length === 1, creditBalanceReport());
+releaseRepA();
+const repGone = creditBalanceReport().filter((i) => i.routeKey === "rep-a");
+ok("ux-v48 注销后 balanceCurrent 清记忆", repGone.length === 0, creditBalanceReport());
+releaseRepB();
 releaseBalA();
 releaseBalB();
 

@@ -3,6 +3,38 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 内核 ux-v48：均衡报告覆盖全档 + 粘性不越过同档均衡锚点（2026-11-25）
+
+### 症状
+ux-v47 落地后，Muse 独立 clone 复跑 npm run check 全绿、签字通过，但指出两点：
+1. `GET /plugins/dsh-pool/status` 的 `pool.balance` 只列出**换过手的档**，从未换手的档
+   （例如注册序靠前那条本来就是余额最多的）从报告里消失，面板上会误以为那档没在均衡。
+2. 同档有 3 条以上路由（workbuddy1..3）时，latch 会在同档非锚点路由处提前 break floor，
+   插到均衡锚点前面——把刚换过去的路由又顶回身后，差值被拉回 300 内，均衡等于不生效。
+   2 路由档恰好卡在锚点处 break，所以这个 bug 只在 3+ 路由档暴露。
+
+### 根因
+- `balanceCurrent` 只在真正换手（`gap > 300`）时才写，没换手的档不写入 → report 没数据。
+- `applyCreditBalance` 只返回 `anchors`（routeKey 集合），latch 的 floor 扫描只知道
+  「这一条是不是锚点」，不知道「latch 自己所在的档已经被均衡判定该烧别的路由了」。3 路由
+  档里 floor 先扫到同档的普通路由（非锚点）就 break，于是 latch 被插到锚点之前。
+
+### 变更
+- `lib/shared/pool.js`：
+  - `applyCreditBalance` 里 `current` 确定后**总是幂等写回** `balanceCurrent`（不换手也写），
+    让 `creditBalanceReport()` 列出所有 ≥2 条且余额已知的档的当前首选；
+  - `applyCreditBalance` 额外返回 `tiers`（tierKey → 当前首选 routeKey）；
+  - `orderedRoutesFor`：latch 抬升前先查 `balance.tiers`，若本档已被均衡判定该烧别的
+    路由（`balancedTo !== latch`），粘性整段跳过——本档内的先后交给均衡决定。
+- 测试：`scripts/check-pool-core.mjs` 新增 11 条 ux-v48 断言（report 覆盖全档、差值恰好
+  =300 不切、3 路由档换手且其余保序、expiry/priority 不同分属不同档、余额非有限整块跳过、
+  latch+均衡联动切走且下一轮不切回、unregister 清记忆），check-pool-core 从 47 → 58 项。
+
+### 自检
+- `npm run check` 全绿：check-all / check-imports / check-pool-core(58) / check-hardening
+  ALL_PASSED / check-qoder-vault(14) / check-checkin-device(12) / check-checkin-claim(28)。
+- 真机：`pool.balance` 现在同时列出 trae 档（首选 trae2）与 qoder 档（首选 qoder1，未换手）。
+
 ## 内核 ux-v47：同档同类路由的 300 分滞回均衡（2026-11-25）
 
 ### 症状
