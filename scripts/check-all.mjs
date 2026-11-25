@@ -90,7 +90,7 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v49"', "内核版本标记已升 ux-v49");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v50"', "内核版本标记已升 ux-v50");
 // ux-v42：latch 让位条件必须是两级排序（当日桶 + 更早到期），不能退回只看 expiring 的窄条件。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "function ranksBefore", "两级排序比较器在位（ranksBefore）");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "!burnsToday && !balanceAnchors.has(head.routeKey) && !ranksBefore(head, ordered[at])", "latch 让位同时看当日桶、均衡锚点与更早到期");
@@ -137,6 +137,16 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "(counts.get(tier) ?? 0) < 2"
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "!registry.some((entry) => entry.route.key === routeKey)", "report 过滤孤儿指针");
 mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v49 3 路由档 latch 播种非锚点，均衡锚点仍排前（bug 回归）", "ux-v49 精确回归断言");
 mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v49 档内只剩 1 条后从 report 过滤掉", "ux-v49 report 过滤断言");
+// ux-v50：两处同步基建缺陷修复（均为真实事故，非预防性）：
+// 1) gh-push.mjs 的 graft 路径创建 tree 时没带 base_tree，导致删除条目（sha:null）
+//    触发 422 GitRPC::BadObjectState —— 第一次删文件就炸（误提交的 .tmp_msg.txt 残留）。
+// 2) 等长编辑（ux-v48→49、1.0.12→13、文档 58→60）触发 git stat-cache racy，提交里仍是旧值，
+//    本地 check 读工作树所以全绿、远端 clone 复跑才炸。新增 check-index-fresh.mjs 按内容哈希
+//    比对，git 说干净但盘上与 HEAD 不同就判失败。
+mustContain(path.join(ROOT, "scripts/gh-push.mjs"), "base_tree:", "graft 创建 tree 时带 base_tree（删除条目不再 422）");
+mustContain(path.join(ROOT, "scripts/gh-push.mjs"), "GitRPC::BadObjectState", "graft 422 根因注释在位");
+mustContain(path.join(ROOT, "scripts/check-index-fresh.mjs"), "hash-object", "index 闸按内容哈希比对（不依赖 stat-cache）");
+mustContain(path.join(ROOT, "scripts/check-index-fresh.mjs"), "漏暂存", "index 闸抓 racy 漏提交");
 
 // ux-v29：路由「莫名其妙掉了」的三处根因回归闸。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "deepseek-v4-flash-official", "Trae 兜底 id 进白名单（不再静默过滤）");

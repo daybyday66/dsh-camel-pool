@@ -263,17 +263,28 @@ async function graftHead({ full, token, headSha, remoteSha }) {
   let uploaded = 0;
   for (const [path, info] of local) {
     if (remoteBlobs.get(path) === info.sha) {
-      entries.push({ path, mode: info.mode, type: "blob", sha: info.sha });
       reused += 1;
       continue;
     }
     entries.push({ path, mode: info.mode, type: "blob", sha: await uploadBlob(info.sha, token, full, cache) });
     uploaded += 1;
   }
+  /**
+   * 删除条目（sha: null）**必须配 base_tree**。GitHub 的 create-tree 接口在没有
+   * base_tree 时把所有条目当成「从空树新建」，遇到 sha: null 就报
+   * 422 GitRPC::BadObjectState —— 历史 graft 全是「只加不改不删」所以从没暴露，
+   * 直到有一次提交删掉了误提交的临时文件才炸。
+   * 带上 base_tree 之后复用条目也可以省略，graft 只发差量。
+   */
   for (const path of remoteBlobs.keys()) {
     if (!local.has(path)) entries.push({ path, mode: "100644", type: "blob", sha: null });
   }
-  const tree = (await api("/repos/" + full + "/git/trees", { method: "POST", body: JSON.stringify({ tree: entries }) }, token)).sha;
+  const tree = entries.length === 0
+    ? (await api("/repos/" + full + "/git/trees/" + remoteSha, {}, token)).sha
+    : (await api("/repos/" + full + "/git/trees", {
+      method: "POST",
+      body: JSON.stringify({ base_tree: remoteTree.sha ?? (await api("/repos/" + full + "/git/commits/" + remoteSha, {}, token)).tree.sha, tree: entries }),
+    }, token)).sha;
   const parts = splitCommit(headSha);
   const made = await api("/repos/" + full + "/git/commits", {
     method: "POST",
@@ -289,7 +300,19 @@ async function graftHead({ full, token, headSha, remoteSha }) {
   note("main -> " + made.sha.slice(0, 8) + "（graft：复用 " + reused + " 个 blob，上传 " + uploaded + " 个）");
 }
 
+/**
+ * 推前硬闸：git 说干净、盘上却与 HEAD 不同（等长编辑触发 stat-cache racy）时，
+ * 直接推会把**旧内容**发出去 —— 本轮 ux-v49 就是这么丢的 patch 标记与版本号。
+ * 由 check-index-fresh.mjs --strict 判定，失败即中止同步。
+ */
+function assertIndexFresh() {
+  execFileSync(process.execPath, [join(ROOT, "scripts", "check-index-fresh.mjs"), "--strict"], {
+    cwd: ROOT, stdio: "inherit",
+  });
+}
+
 async function main() {
+  assertIndexFresh();
   const { full } = repoInfo();
   const token = readToken();
   const headSha = git(["rev-parse", "HEAD"]).trim();
