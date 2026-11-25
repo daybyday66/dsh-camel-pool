@@ -147,6 +147,9 @@ mustContain(path.join(ROOT, "scripts/gh-push.mjs"), "base_tree:", "graft 创建 
 mustContain(path.join(ROOT, "scripts/gh-push.mjs"), "GitRPC::BadObjectState", "graft 422 根因注释在位");
 mustContain(path.join(ROOT, "scripts/check-index-fresh.mjs"), "hash-object", "index 闸按内容哈希比对（不依赖 stat-cache）");
 mustContain(path.join(ROOT, "scripts/check-index-fresh.mjs"), "漏暂存", "index 闸抓 racy 漏提交");
+// 3) graft 用 commit sha 当树查（/git/trees/<commit> 会把 commit sha 原样回显）→ 422 Tree SHA is not a tree object。
+mustContain(path.join(ROOT, "scripts/gh-push.mjs"), "remoteCommit.tree.sha", "graft 用 commit 的 tree.sha 而不是 commit sha");
+mustContain(path.join(ROOT, "scripts/gh-push.mjs"), "无需再 graft", "内容一致时短路，不重复 graft");
 
 // ux-v29：路由「莫名其妙掉了」的三处根因回归闸。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "deepseek-v4-flash-official", "Trae 兜底 id 进白名单（不再静默过滤）");

@@ -245,7 +245,14 @@ async function buildTree(commitSha, parentSha, baseTree, token, full, cache) {
  */
 async function graftHead({ full, token, headSha, remoteSha }) {
   log("远端有本地没有的提交，按 HEAD 内容 graft 到 " + remoteSha.slice(0, 8) + "…");
-  const remoteTree = await api("/repos/" + full + "/git/trees/" + remoteSha + "?recursive=1", {}, token);
+  /**
+   * 必须用 commit 的 tree.sha，不能用 commit sha 去请求 /git/trees：GitHub 对
+   * `/git/trees/<commit>` 会把对象的 sha 原样回显成 commit sha，拿这个值当
+   * base_tree / 新提交的 tree 就报 422 "Tree SHA is not a tree object"。
+   */
+  const remoteCommit = await api("/repos/" + full + "/git/commits/" + remoteSha, {}, token);
+  const remoteTreeSha = remoteCommit.tree.sha;
+  const remoteTree = await api("/repos/" + full + "/git/trees/" + remoteTreeSha + "?recursive=1", {}, token);
   const remoteBlobs = new Map();
   for (const item of remoteTree.tree ?? []) {
     if (item.type === "blob") remoteBlobs.set(item.path, item.sha);
@@ -280,10 +287,10 @@ async function graftHead({ full, token, headSha, remoteSha }) {
     if (!local.has(path)) entries.push({ path, mode: "100644", type: "blob", sha: null });
   }
   const tree = entries.length === 0
-    ? (await api("/repos/" + full + "/git/trees/" + remoteSha, {}, token)).sha
+    ? remoteTreeSha
     : (await api("/repos/" + full + "/git/trees", {
       method: "POST",
-      body: JSON.stringify({ base_tree: remoteTree.sha ?? (await api("/repos/" + full + "/git/commits/" + remoteSha, {}, token)).tree.sha, tree: entries }),
+      body: JSON.stringify({ base_tree: remoteTreeSha, tree: entries }),
     }, token)).sha;
   const parts = splitCommit(headSha);
   const made = await api("/repos/" + full + "/git/commits", {
@@ -331,8 +338,16 @@ async function main() {
   let known = false;
   try { git(["cat-file", "-e", remoteSha + "^{commit}"], { stdio: ["pipe", "pipe", "pipe"] }); known = true; } catch { known = false; }
   if (!known) {
-    // 本地没有远端最新提交（别处推过 / 远端被强推）：重建整条历史既慢又会在根提交上崩，
-    // 直接把 HEAD 的树 graft 到远端 HEAD 上，只上传有差异的 blob。
+    // 本地没有远端最新提交（别处推过 / 远端被强推）：先看内容是否已经一致
+    // —— graft 出来的提交 SHA 必然与本地不同，内容相同还要再建一棵相同的树纯属浪费。
+    const headTree = git(["rev-parse", headSha + "^{tree}"]).trim();
+    const remoteTreeNow = (await api("/repos/" + full + "/git/commits/" + remoteSha, {}, token)).tree.sha;
+    if (remoteTreeNow === headTree) {
+      try { git(["update-ref", "refs/remotes/origin/main", remoteSha]); } catch {}
+      note("远端内容已与本地一致（SHA 分叉：远端 " + remoteSha.slice(0, 8) + "，本地 " + headSha.slice(0, 8) + "），无需再 graft");
+      return;
+    }
+    // 重建整条历史既慢又会在根提交上崩，直接把 HEAD 的树 graft 到远端 HEAD 上，只上传有差异的 blob。
     await graftHead({ full, token, headSha, remoteSha });
     const after = await api("/repos/" + full + "/git/ref/heads/main", {}, token);
     if (after.object.sha === headSha) {
