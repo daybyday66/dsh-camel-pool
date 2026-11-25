@@ -3,44 +3,6 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
-## 内核 ux-v50：同步基建两处真实缺陷（graft 不删文件 / 等长编辑漏提交）（2026-11-26）
-
-### 症状 A：远端残留已删除的文件
-ux-v49 之后有一次提交删掉了误入库的临时文件，走 `npm run sync` 时远端报
-`/git/trees -> 422 GitRPC::BadObjectState`，重试多次完全一致；而在此之前所有 graft
-同步都成功。结果是远端那份提交里旧文件仍在（已用 Contents API 单独删除）。
-
-### 根因 A
-`scripts/gh-push.mjs` 的 graftHead() 创建 tree 时**没有带 `base_tree`**，却把「这个
-路径在新树里删掉」表达成 `{ sha: null }`。GitHub 的 create-tree 在没有 base_tree 时把
-条目当成「从空树新建」，遇到 sha:null 无法解释，直接 422。历史 graft 全是「只加不改不删」
-（新增/更新走 blob 上传），所以这个分支一直没被走到。
-
-### 症状 B：改了却没进提交（本轮撞两次）
-patch ux-v48→ux-v49、版本号 1.0.12→1.0.13 都是**等长替换**；改完之后 `git status` 与
-`git diff` 都报干净，`git commit` 成功、`npm run check` 全绿（它读的是工作树），
-但提交里的值仍是旧的 —— 本地自检不可能发现，只有远端干净 clone 复跑才炸。
-第二次是文档数字（58→60、61 项→60 项），同样是等长替换、同样报干净。
-
-### 根因 B
-git 的 stat-cache 用 size + mtime 判「文件未变」，等长替换 + 同秒 mtime 就落进 racy 窗口，
-git 直接跳过重算。这不是偶发，只要编辑是等长且快速就必然出现。
-
-### 变更
-- `scripts/gh-push.mjs` graftHead()：创建 tree 时带 `base_tree`（取远端 commit 的 tree），
-  「与远端同内容」的条目不再重复上报，删除条目有了基准；无任何差异时直接复用远端树。
-- 新增 `scripts/check-index-fresh.mjs`：**完全不看 stat-cache**——取 HEAD 全树拿到每个
-  路径的 blob sha，用 `git hash-object --stdin-paths` 重算盘上真实内容，逐个比对。
-  内容不同且 `git diff --name-only HEAD` 又说干净 = 漏暂存，直接判失败并给出
-  `touch … && git add … && git commit --amend` 的处置（这类情况 git add 自己也会跳过，
-  必须先 touch 刷 mtime）。git 已承认的未提交改动只提示、不拦，正常开发流不受影响。
-- 版本 1.0.13 → 1.0.14，patch ux-v49 → ux-v50；`npm run check` 链末尾接入 index 闸。
-
-### 自检
-- check-index-fresh：干净树报 ok；伪造未提交改动只提示；伪造「盘上新值 + HEAD 旧值 +
-  git 报干净」判 FAIL（在临时仓库里两种场景都实跑过）。
-- gh-push 的 base_tree：代码级闸（graft 与 422 根因注释必须同时在位）。
-
 ## 内核 ux-v49：均衡报告只呈现可均衡的档 + 补 4 条精确回归（2026-11-25）
 
 ### 症状

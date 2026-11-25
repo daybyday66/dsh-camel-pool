@@ -56,8 +56,6 @@
   **余额接口读不到标「未校验到账」**、已签过不重复 claim。宿主包（@deepseek-ai/* 与
   @earendil-works/*）独立 node 下解析不到时自动换成最小替身。
 
-- `scripts/check-index-fresh.mjs`（ux-v50）—— 防「盘上内容与 HEAD 不同，但 git 说自己干净」的等长编辑漏提交：用 `git hash-object` 重算每个跟踪文件的真实内容哈希与 `git ls-tree -r HEAD` 逐文件比对，完全不依赖 stat-cache。`npm run check` 里只 WARN；`gh-push.mjs` 以 `--strict` 调用，漏暂存直接中止同步。检出时提示 `touch <files> && git add <files> && git commit --amend --no-edit`（这类改动下 `git add` 自己也会被 stat-cache 跳过）。
-
 只想跑一部分时用 `npm run check:syntax` / `npm run check:imports` / `npm run check:core`。
 
 实机那一层是 `npm run verify:live`：不传端口时自动在最近出现过的宿主端口里找活的那个，
