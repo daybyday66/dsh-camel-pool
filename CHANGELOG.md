@@ -3,7 +3,7 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
-## 内核 ux-v49：均衡报告只呈现可均衡的档 + 补 3 条精确回归（2026-11-25）
+## 内核 ux-v49：均衡报告只呈现可均衡的档 + 补 4 条精确回归（2026-11-25）
 
 ### 症状
 ux-v48 交付后 Muse 复核（逻辑层）通过，但指出四点：① 缺 ux-v48 真 bug 的精确回归断言
@@ -21,8 +21,9 @@ codearts 当日桶曾因 balanceCurrent 历史残留出现在 pool.balance，被
 - lib/shared/pool.js 的 creditBalanceReport()：按注册表实时统计每个 tier 的路由数，
   只呈现 ≥2 条且 routeKey 仍在注册表的档。只过滤呈现，不删 balanceCurrent 记忆 ——
   路由增删回到 ≥2 条时原来的选择照样能用，unregister 清记忆的路径不变。
-- 测试 scripts/check-pool-core.mjs 新增 3 条（58 → 61）：
+- 测试 scripts/check-pool-core.mjs 新增 4 条（56 → 60，实测条数）：
   - ux-v49 3 路由档 latch 播种非锚点，均衡锚点仍排前（bug 回归）—— ux-v48 真 bug 的精确复现；
+  - ux-v49 两条同档时进 report —— 过滤前置条件（≥2 条且余额已知必须呈现）；
   - ux-v49 档内只剩 1 条后从 report 过滤掉 —— 单条档不再进报告；
   - ux-v49 balancedTo===latch 时粘性正常生效 —— 反向分支不崩、首位仍是锚点。
 - scripts/check-all.mjs：版本闸升 ux-v49，加 4 条 ux-v49 静态闸（report 过滤单条档 /
@@ -58,7 +59,7 @@ ux-v47 落地后，Muse 独立 clone 复跑 npm run check 全绿、签字通过�
     路由（`balancedTo !== latch`），粘性整段跳过——本档内的先后交给均衡决定。
 - 测试：`scripts/check-pool-core.mjs` 新增 11 条 ux-v48 断言（report 覆盖全档、差值恰好
   =300 不切、3 路由档换手且其余保序、expiry/priority 不同分属不同档、余额非有限整块跳过、
-  latch+均衡联动切走且下一轮不切回、unregister 清记忆），check-pool-core 从 47 → 58 项。
+  latch+均衡联动切走且下一轮不切回、unregister 清记忆），check-pool-core 从 45 → 56 项（实测条数）。
 
 ### 自检
 - `npm run check` 全绿：check-all / check-imports / check-pool-core(58) / check-hardening
