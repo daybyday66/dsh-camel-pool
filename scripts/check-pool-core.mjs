@@ -19,6 +19,7 @@ import {
   poolStatusDocument,
   mergedModelGroups,
   routeModelDiagnostics,
+  creditBalanceReport,
 } from "../lib/shared/pool.js";
 import { HIDE_ALL_SENTINEL } from "../lib/shared/hidden.js";
 
@@ -98,18 +99,34 @@ ok("latch 不得越过更早到期的路由", latched[1] === "trae" && latched[2
 
 // ⑤b ux-v36：同一档（到期时间与 priority 都相同，只有注册序不同）之间粘性仍然生效。
 // 真机上这就是「同为 11-30 到期、priority 都是 1 的 trae / trae2」之间来回钉住。
-const releaseTieA = registerPoolRoute(fakeRoute("tie-a", 1, {
-  status: "signed-in",
-  credits: { remaining: 100, total: 100, endTime: "2026-11-30T00:00:00.000Z" },
-}));
-const releaseTieB = registerPoolRoute(fakeRoute("tie-b", 1, {
-  status: "signed-in",
-  credits: { remaining: 100, total: 100, endTime: "2026-11-30T00:00:00.000Z" },
-}));
+// ux-v47：kind 必须独立成 "fake-tie"，否则 tie-a/tie-b 会和上面的 trae(1800) 落进
+// 同一个均衡档（同 kind + 同 11-30 + 同 priority 1），余额差 1700>300，粘性被均衡压住。
+const releaseTieA = registerPoolRoute({
+  ...fakeRoute("tie-a", 1, {
+    status: "signed-in",
+    credits: { remaining: 100, total: 100, endTime: "2026-11-30T00:00:00.000Z" },
+  }),
+  kind: "fake-tie",
+});
+const releaseTieB = registerPoolRoute({
+  ...fakeRoute("tie-b", 1, {
+    status: "signed-in",
+    credits: { remaining: 100, total: 100, endTime: "2026-11-30T00:00:00.000Z" },
+  }),
+  kind: "fake-tie",
+});
 await refreshPoolCredits({ force: true, only: ["tie-a", "tie-b"] });
 setLatch(MODEL, "tie-b");
 const sameTier = orderedRoutesFor(MODEL, {}).map((item) => item.routeKey);
-ok("同档路由之间粘性仍生效", sameTier[0] === "codearts" && sameTier[1] === "tie-b", sameTier);
+// ux-v47：同档内余额相同（100/100，差 0 ≤300）时均衡不换手，latch 仍能换先后。
+// 但 trae 与 tie 同 expiry/priority、注册序更靠前，会稳定排在 tie 之前，故只断言相对序。
+ok(
+  "同档路由之间粘性仍生效",
+  sameTier[0] === "codearts" &&
+    sameTier.indexOf("tie-b") !== -1 &&
+    sameTier.indexOf("tie-b") < sameTier.indexOf("tie-a"),
+  sameTier,
+);
 releaseTieA();
 releaseTieB();
 
@@ -254,6 +271,57 @@ mergedModelGroups({});
 const diagHidden = routeModelDiagnostics().find((d) => d.key === "hidden-one");
 ok("hiddenModelCount 计入被 hidden() 滤掉的模型", diagHidden?.hiddenModelCount === 1 && diagHidden?.rawModelCount === 2, diagHidden);
 offHidden();
+
+// ux-v47：同档同类路由的 300 分滞回均衡（trae/trae2 同到期时，差 >300 才换手）
+function fakeBalanceRoute(key, priority, kind, holder) {
+  return {
+    key,
+    kind,
+    providerId: "bal-" + key,
+    channelId: "bal-" + key,
+    displayName: key,
+    priority,
+    chatUrl: () => "http://127.0.0.1/",
+    token: async () => "test-token",
+    models: () => [{ id: MODEL, name: "DeepSeek-V4.1-Flash", contextWindow: 1000, maxTokens: 100, input: ["text"] }],
+    hidden: () => [],
+    status: async () => ({ status: "signed-in" }),
+    credits: async () => holder.doc,
+  };
+}
+const BAL_END = "2026-12-20T00:00:00.000Z";
+const balA = { doc: { status: "signed-in", credits: { remaining: 2000, total: 4000, endTime: BAL_END } } };
+const balB = { doc: { status: "signed-in", credits: { remaining: 2000, total: 4000, endTime: BAL_END } } };
+const releaseBalA = registerPoolRoute(fakeBalanceRoute("bal-a", 1, "bal-trae", balA));
+const releaseBalB = registerPoolRoute(fakeBalanceRoute("bal-b", 1, "bal-trae", balB));
+await refreshPoolCredits({ force: true, only: ["bal-a", "bal-b"] });
+const balOrder = () => orderedRoutesFor(MODEL, {}).map((item) => item.routeKey).filter((key) => key.startsWith("bal-"));
+
+ok("ux-v47 同余额时保持注册序，不来回切", balOrder().join(",") === "bal-a,bal-b", balOrder());
+balA.doc.credits.remaining = 1500;
+await refreshPoolCredits({ force: true, only: ["bal-a"] });
+ok("ux-v47 积分差 >300 换到积分多的一方", balOrder().join(",") === "bal-b,bal-a", balOrder());
+ok("ux-v47 均衡状态可查（当前烧 bal-b）", creditBalanceReport().some((item) => item.routeKey === "bal-b"), creditBalanceReport());
+balB.doc.credits.remaining = 1700;
+await refreshPoolCredits({ force: true, only: ["bal-b"] });
+ok("ux-v47 差 200 落在滞回带内不切回", balOrder().join(",") === "bal-b,bal-a", balOrder());
+balB.doc.credits.remaining = 1100;
+await refreshPoolCredits({ force: true, only: ["bal-b"] });
+ok("ux-v47 反向差 >300 切回另一条", balOrder().join(",") === "bal-a,bal-b", balOrder());
+// 跨渠道：到期时间与 priority 完全相同，但 kind 不同 —— 不得互相均衡
+const balC = { doc: { status: "signed-in", credits: { remaining: 9000, total: 9000, endTime: BAL_END } } };
+const releaseBalC = registerPoolRoute(fakeBalanceRoute("bal-c", 1, "bal-qoder", balC));
+await refreshPoolCredits({ force: true, only: ["bal-c"] });
+const balOrder2 = balOrder();
+ok("ux-v47 跨渠道不混着均衡（bal-c 不抢 bal-trae 档的首位）", balOrder2.join(",") === "bal-a,bal-b,bal-c", balOrder2);
+releaseBalC();
+balB.doc.credits.remaining = 5000;
+await refreshPoolCredits({ force: true, only: ["bal-b"] });
+ok("ux-v47 差 3500 再次换到 bal-b", balOrder().join(",") === "bal-b,bal-a", balOrder());
+const balOff = orderedRoutesFor(MODEL, { balanceCredits: false }).map((item) => item.routeKey).filter((key) => key.startsWith("bal-"));
+ok("ux-v47 可关闭均衡（balanceCredits:false 回纯注册序）", balOff.join(",") === "bal-a,bal-b", balOff);
+releaseBalA();
+releaseBalB();
 
 releaseCodearts();
 releaseTrae();

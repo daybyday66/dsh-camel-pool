@@ -90,10 +90,10 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v46"', "内核版本标记已升 ux-v46");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v47"', "内核版本标记已升 ux-v47");
 // ux-v42：latch 让位条件必须是两级排序（当日桶 + 更早到期），不能退回只看 expiring 的窄条件。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "function ranksBefore", "两级排序比较器在位（ranksBefore）");
-mustContain(path.join(ROOT, "lib/shared/pool.js"), "!burnsToday && !ranksBefore(head, ordered[at])", "latch 让位同时看当日桶与更早到期");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "!burnsToday && !balanceAnchors.has(head.routeKey) && !ranksBefore(head, ordered[at])", "latch 让位同时看当日桶、均衡锚点与更早到期");
 // ux-v43：直连通道必须自带非 undici 的 User-Agent。实测 Trae 网关把 undici / curl /
 // Go-http-client / python-requests / 空 UA 一律判成裸客户端回 4011（伪装成限流），
 // undici.fetch 默认 UA 就是 "undici" —— 缺这两条，trae/trae2 会重新 100% 502。
@@ -119,6 +119,13 @@ mustContain(path.join(ROOT, "scripts/check-checkin-claim.mjs"), "claimDailyCheck
 mustContain(path.join(ROOT, "lib/panel.js"), 'typeof payload.note === "string"', "normalizeClaim 优先取 payload.note");
 mustCount(path.join(ROOT, "lib/client.js"), "setNote(body.note)", 2, "trae/qoder 手动签到成功分支透 note");
 mustContain(path.join(ROOT, "scripts/check-checkin-claim.mjs"), "9095", "claim 测试覆盖 9095 设备门");
+// ux-v47：同档同类路由的 300 分滞回均衡。缺任一条，两条同日到期的同渠道路由会退化成
+// 「注册序靠前的那条被烧穿」或「每轮都切、差值永远卡在 300 内」。
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "const CREDIT_BALANCE_GAP = 300;", "300 分滞回阈值在位");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "gap > CREDIT_BALANCE_GAP", "差值超阈值才换手");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "!balanceAnchors.has(head.routeKey)", "latch 不得越过均衡锚点");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "balance: creditBalanceReport()", "状态接口透出当前燃烧目标");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "balanceCurrent.set(balanceTierKeyOf(latchEntry.route, latchCredit), latch)", "latch 播种均衡记忆");
 
 // ux-v29：路由「莫名其妙掉了」的三处根因回归闸。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "deepseek-v4-flash-official", "Trae 兜底 id 进白名单（不再静默过滤）");

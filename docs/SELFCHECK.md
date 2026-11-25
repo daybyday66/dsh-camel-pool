@@ -33,10 +33,12 @@
   ② 跨模块裸调用：某名字在别的 `lib/` 文件里有声明，本文件没 import 也没声明却直接调
   ——「抄了逻辑没抄助手」（P3-11）。`--selftest` 把这两起真实事故在内存里复原，必须抓回来
   且干净树零误报；
-- `scripts/check-pool-core.mjs` —— 真 import 真跑的 39 项池内核断言
+- `scripts/check-pool-core.mjs` —— 真 import 真跑的 47 项池内核断言
   （当日桶排队、latch 让位给当日桶、latch 不得越过更早到期的路由、同档粘性仍生效、
   真实形状回归（11-30 的 trae 必须排在 12-05 的 wb2 之前）、`expiring=0` 不误判、
-  状态字段透出、`only` 只刷指定路由）。
+  状态字段透出、`only` 只刷指定路由；ux-v47 起另有 8 项同档均衡断言：同余额保持注册序、
+  差 >300 换手、差 200 落在滞回带内不切回、反向差切回、跨渠道不混算、开关可关、
+  `pool.balance` 可查当前燃烧目标）。
   静态断言抓不住 `??` 写成 `||` 这类改动，所以运行时那一层不能省。
 - `scripts/check-hardening.mjs` 的 ux-v43 两条闸锁的是「直连通道必须自带非 undici 的 UA」：
   `const DEFAULT_USER_AGENT =` 必须在位、`withDefaultUserAgent(input, raw)` 必须在 `directFetch`

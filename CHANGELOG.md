@@ -3,6 +3,47 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 内核 ux-v47：同档同类路由的 300 分滞回均衡（2026-11-25）
+
+### 症状
+排序骨架只有「到期时间 → priority → 注册序」三级，同一天到期、同 priority 的同类路由
+（trae / trae2、workbuddy1..3、qoder1/qoder2）只能按注册序烧：注册序靠前的那条被一直
+烧穿，另一条几乎不动。用户要的是**积分均衡**：两条余额差超过 300 分才换手，换过去后
+一直烧多的一方，直到它反过来比另一方少超过 300 再切回（滞回，避免在 300 边界抖动）。
+
+### 根因
+排序里的第三级是静态注册序，没有任何按余额调度的层；latch（任务粘性）只记「上次服务
+成功的是谁」，不能承担均衡。二者混在一起还会互相打架：均衡把 A 换到前面，latch 又把
+刚服务过的 B 拉回来，差值永远卡在 300 内，等于没生效。
+
+### 变更
+- `lib/shared/pool.js`：
+  - `CREDIT_BALANCE_GAP = 300` 与 `balanceCurrent`（tierKey → 当前燃烧目标）；
+  - `balanceTierKeyOf(route, credit)` = `kind|expiryMs|priority`：只有同渠道、同到期、
+    同 priority 才互相均衡，跨渠道就算到期时间撞在一起也不混算；
+  - `applyCreditBalance(items)`：按档分桶，块内任一路由余额未知就整块跳过（不猜）；
+    `top.remaining - current.remaining > 300` 才换手，选中的那条挪到本桶第一个槽位，
+    其余保持相对序；
+  - `orderedRoutesFor`：均衡在 latch 之前算；latch 命中本池 live 路由时先播种进
+    `balanceCurrent`（刚服务成功的那条本身就是当前该烧的），否则下一轮均衡会把刚服务
+    的路由又换掉；latch 的 floor 扫描把均衡锚点与「当日桶 / 更早到期」同级保护；
+  - `unregisterPoolRoute` 清掉指向已注销路由的均衡记忆；`poolStatusDocument` 增加
+    `pool.balance`。
+- `orderedRoutesFor` 新增选项 `balanceCredits: false`（关掉均衡，回纯注册序）。
+- 测试 `scripts/check-pool-core.mjs` 增加 8 条 ux-v47 断言：同余额保持注册序、差 500
+  换到多的一方、差 200 落在滞回带内不切回、反向差 400 切回、跨渠道不混算（bal-c 9000
+  不抢 bal-trae 档首位）、差 3500 再切、开关可关、`pool.balance` 可查当前燃烧目标。
+  原有「同档路由之间粘性仍生效」的 tie 路由改用独立 kind `fake-tie`，否则它会和
+  trae(1800) 落进同一个均衡档（同 kind + 同 11-30 + 同 priority 1），断言位置被均衡正常
+  改变后误报。
+
+### 自检
+- `check-pool-core` 39 → 47 项全过；`npm run check` 全绿（含 check-all 五条 ux-v47
+  静态闸、check-imports、check-hardening、check-qoder-vault 14、check-checkin-device 12、
+  check-checkin-claim 28）。
+- 真机：重载后 `GET /plugins/dsh-pool/status` 的 `patch` 升至 ux-v47，`pool.balance`
+  能读到当前燃烧目标。
+
 ## 内核 ux-v46：签到结果的 note 从服务端一路透到面板（2026-11-25）
 
 ### 症状
