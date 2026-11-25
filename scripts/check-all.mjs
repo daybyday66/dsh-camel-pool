@@ -90,7 +90,7 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v51"', "内核版本标记已升 ux-v51");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v52"', "内核版本标记已升 ux-v52");
 // ux-v42：latch 让位条件必须是两级排序（当日桶 + 更早到期），不能退回只看 expiring 的窄条件。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "function ranksBefore", "两级排序比较器在位（ranksBefore）");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "!burnsToday && !balanceAnchors.has(head.routeKey) && !ranksBefore(head, ordered[at])", "latch 让位同时看当日桶、均衡锚点与更早到期");
@@ -160,6 +160,12 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), '["qwen4-max", 4]', "qwen4-ma
 mustContain(path.join(ROOT, "lib/shared/pool.js"), '["kimi-k3.1-pro-highspeed", 4]', "kimi-k3.1-pro-highspeed 进白名单");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "glm-?5\\.[3-9](?![-_. ]?flash)", "能力打分认 glm-5.3 以上版本（5.4 不再掉档）");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "qwen4", "能力打分认 qwen4 家族");
+
+// ux-v52：上游指针别名（qorder 的 qmodel_latest / gmodel_latest）靠 display name 模糊匹配
+// 被吸进 qwen4-max / glm-5.4 组 —— 上游改 display name 就会悄悄掉出池，用断言钉死。
+mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v52 qmodel_latest 凭名称合并进 qwen4-max 组", "别名合并断言在位");
+mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v52 gmodel_latest 凭名称合并进 glm-5.4 组", "gmodel 别名合并断言在位");
+mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v52 已合并的别名不出现在 droppedModels（只有陌生名 stranger_alias 被滤）", "别名不落 droppedModels 断言在位");
 
 // ux-v29：路由「莫名其妙掉了」的三处根因回归闸。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "deepseek-v4-flash-official", "Trae 兜底 id 进白名单（不再静默过滤）");

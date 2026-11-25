@@ -3,6 +3,36 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 内核 ux-v52：钉死上游指针别名的名称合并（2026-11-26）
+
+### 症状
+ux-v51 之后真机上 qoder1/qoder2 的 `droppedModels` 从 5 条变成 3 条，少掉的恰好是
+`qmodel_latest` / `gmodel_latest` —— 这两个 id 从来没在 `CURATED_MODELS` 点名，却能进池。
+
+### 根因
+`curatedKeyOf()` 的白名单匹配有三层：精确 id → `candidate.id` → **名称 slug 兜底**。
+qoder 上游把 `qmodel_latest` 的 display name 写成 `Qwen4-Max`、`gmodel_latest` 写成 `GLM-5.4`，
+于是它们被 `name:qwen4max` / `name:glm54` 的分组键并进对应白名单组，跟着 ux-v51 新登记的
+条目一起进池。**上游哪天改 display name，这两个别名就会悄悄掉出池，而且没有任何报错。**
+
+### 变更
+- `scripts/check-pool-core.mjs` 新增 4 条 ux-v52 断言（64 → 68 项）：别名凭名称合并进
+  qwen4-max / glm-5.4 组、合并后不再作为独立 poolId 出现、已合并别名不出现在 `droppedModels`
+  （陌生名 `stranger_alias` 仍被滤掉，证明过滤本身没被放松）。
+- `scripts/check-all.mjs` 加 3 条静态闸锁住这三条断言标签。
+- 内核 `patch` ux-v51 → ux-v52，`package.json` 1.0.15 → 1.0.16。
+
+### 试过但回退：同族「新一代优先」
+原本想让 glm-5.4 排在 glm-5.3 前面。两种实现都失败，记录在这里免得以后重复踩：
+1. **叠进 `strengthOf` 加分**：真机 glm-5.3 的 ctx 1048576 / maxTokens 200000 比 glm-5.4 的
+   1000000 / 32768 大，power 高出约 3.3 分，世代加分只有 1 分，被顶掉。
+2. **放进比较器**：`glm-5.4 > glm-5.3`（世代）、`glm-5.3 > qwen4-max`（power）、
+   `qwen4-max > glm-5.4`（power）构成**环**，比较器不再是全序，V8 的排序结果不稳定 ——
+   实测真机 glm-5.4 还是排在 glm-5.3 后面。
+结论：tier 4 内「按综合能力降序」是既定契约，跨族比较天然成环，不能只在族内插值。
+真要改就得重定义 tier 4 的排序键（例如族内先世代、族间比族内最高 power），那是产品决策，
+不在本次范围。当前行为：glm-5.4 与 glm-5.3 同档，glm-5.3 因 ctx/maxTokens 更大排在前面。
+
 ## 内核 ux-v51：登记上游新上架的模型（glm-5.4 / qwen4-max / kimi-k3.1-pro-highspeed）（2026-11-26）
 
 ### 症状

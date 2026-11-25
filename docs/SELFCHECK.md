@@ -33,7 +33,7 @@
   ② 跨模块裸调用：某名字在别的 `lib/` 文件里有声明，本文件没 import 也没声明却直接调
   ——「抄了逻辑没抄助手」（P3-11）。`--selftest` 把这两起真实事故在内存里复原，必须抓回来
   且干净树零误报；
-- `scripts/check-pool-core.mjs` —— 真 import 真跑的 64 项池内核断言
+- `scripts/check-pool-core.mjs` —— 真 import 真跑的 68 项池内核断言
   （当日桶排队、latch 让位给当日桶、latch 不得越过更早到期的路由、同档粘性仍生效、
   真实形状回归（11-30 的 trae 必须排在 12-05 的 wb2 之前）、`expiring=0` 不误判、
   状态字段透出、`only` 只刷指定路由；ux-v47 起另有 8 项同档均衡断言 + ux-v48 起 11 项边界加固 + ux-v49 起 4 项精确回归（3 路由 latch 非锚点、report 过滤单条档、balancedTo===latch 反向分支）（差值=300 不切、3 路由档保序、expiry/priority 不同档隔离、余额非有限整块跳过、latch+均衡联动、unregister 清记忆、report 覆盖全档）：同余额保持注册序、

@@ -464,6 +464,41 @@ const diagNew = routeModelDiagnostics().find((d) => d.key === "new-models");
 ok("ux-v51 老一代存量仍被滤掉（glm-5.2 / minimax-m2.7 / kimi-k2.8-preview）",
   diagNew?.rawModelCount === 6 && diagNew?.curatedModelCount === 3
   && ["glm-5.2", "minimax-m2.7", "kimi-k2.8-preview"].every((id) => (diagNew?.droppedModels ?? []).includes(id)), diagNew);
+// ux-v52：上游指针别名（qoder 的 qmodel_latest / gmodel_latest）凭 display name 合并进白名单组。
+// 真机里这两个 id 没在 CURATED_MODELS 点名，却没出现在 droppedModels —— 唯一解释是 curatedKeyOf
+// 的名称模糊匹配（candidate.name === "Qwen4-Max" / "GLM-5.4"）让它被吸进 qwen4-max / glm-5.4 组。
+// 上游哪天把 display name 改了，这两个别名会悄悄重新掉出池，所以用断言钉死这个行为。
+const releaseAlias = registerPoolRoute({
+  ...fakeRoute("alias-models", 2, { status: "signed-in", credits: { remaining: 1, total: 1 } }),
+  models: () => [
+    { id: "qmodel_latest", name: "Qwen4-Max", contextWindow: 1000000, maxTokens: 200000, input: ["text"] },
+    { id: "gmodel_latest", name: "GLM-5.4", contextWindow: 1000000, maxTokens: 32768, input: ["text"] },
+    { id: "stranger_alias", name: "Some Random Model", contextWindow: 1000, maxTokens: 100, input: ["text"] },
+  ],
+});
+const aliasGroups = mergedModelGroups({});
+const qwenGroup = aliasGroups.find((g) => g.poolId === "qwen4-max");
+const glmGroup = aliasGroups.find((g) => g.poolId === "glm-5.4");
+const aliasCandIds = (group) => {
+  if (!group) return [];
+  const out = [];
+  for (const list of group.candidates.values()) for (const c of list ?? []) out.push(c.id);
+  return out;
+};
+ok("ux-v52 qmodel_latest 凭名称合并进 qwen4-max 组",
+  qwenGroup && aliasCandIds(qwenGroup).includes("qmodel_latest"), aliasCandIds(qwenGroup));
+ok("ux-v52 gmodel_latest 凭名称合并进 glm-5.4 组",
+  glmGroup && aliasCandIds(glmGroup).includes("gmodel_latest"), aliasCandIds(glmGroup));
+ok("ux-v52 合并后别名不再作为独立 poolId 出现",
+  !aliasGroups.some((g) => ["qmodel_latest", "gmodel_latest"].includes(g.poolId)),
+  aliasGroups.map((g) => g.poolId));
+const diagAlias = routeModelDiagnostics().find((d) => d.key === "alias-models");
+ok("ux-v52 已合并的别名不出现在 droppedModels（只有陌生名 stranger_alias 被滤）",
+  diagAlias && !["qmodel_latest", "gmodel_latest"].some((id) => (diagAlias.droppedModels ?? []).includes(id))
+  && (diagAlias.droppedModels ?? []).includes("stranger_alias"), diagAlias);
+releaseAlias();
+
+
 releaseNew();
 
 releaseRepB();
