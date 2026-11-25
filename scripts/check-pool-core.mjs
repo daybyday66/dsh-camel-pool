@@ -498,6 +498,38 @@ ok("ux-v52 已合并的别名不出现在 droppedModels（只有陌生名 strang
   && (diagAlias.droppedModels ?? []).includes("stranger_alias"), diagAlias);
 releaseAlias();
 
+// ux-v53：别名合并改成按 id 钉死（ID_ALIASES），不再只靠 display name 模糊匹配。
+// 上游把 display name 改掉的场景：名称归一化已经匹配不上，但 id 别名仍能把候选并进白名单组。
+// 这正是 ux-v52 那 4 条断言的盲区——fixture 写死当前 display name，上游改名后测试照样全过。
+const releaseRenamed = registerPoolRoute({
+  ...fakeRoute("renamed-alias", 2, { status: "signed-in", credits: { remaining: 1, total: 1 } }),
+  models: () => [
+    { id: "qmodel_latest", name: "Qwen-4-Max-Latest-Pointer", contextWindow: 1000000, maxTokens: 200000, input: ["text"] },
+    { id: "gmodel_latest", name: "GLM-5.4-Exclusive-New", contextWindow: 1000000, maxTokens: 32768, input: ["text"] },
+    // 归一化不跨词：多一段 "Preview" 就是另一个名字，不该被并进 qwen4-max。
+    { id: "qwen4-max-preview", name: "Qwen4-Max Preview", contextWindow: 1000000, maxTokens: 200000, input: ["text"] },
+  ],
+});
+const renamedGroups = mergedModelGroups({});
+const renamedQwen = renamedGroups.find((g) => g.poolId === "qwen4-max");
+const renamedGlm = renamedGroups.find((g) => g.poolId === "glm-5.4");
+const renamedIds = (group) => {
+  const out = [];
+  for (const list of group?.candidates?.values?.() ?? []) for (const c of list ?? []) out.push(c.id);
+  return out;
+};
+ok("ux-v53 上游改 display name 后 qmodel_latest 仍凭 ID 别名并入 qwen4-max",
+  renamedQwen && renamedIds(renamedQwen).includes("qmodel_latest"), renamedIds(renamedQwen));
+ok("ux-v53 上游改 display name 后 gmodel_latest 仍凭 ID 别名并入 glm-5.4",
+  renamedGlm && renamedIds(renamedGlm).includes("gmodel_latest"), renamedIds(renamedGlm));
+const renamedPoolIds = renamedGroups.map((g) => g.poolId);
+ok("ux-v53 mergedModelGroups 输出 poolId 无重复（唯一性不变量，与注册顺序无关）",
+  renamedPoolIds.length === new Set(renamedPoolIds).size, renamedPoolIds);
+ok("ux-v53 名称变体 Qwen4-Max Preview 不并进 qwen4-max（归一化不跨词）",
+  !renamedIds(renamedQwen).includes("qwen4-max-preview")
+  && (routeModelDiagnostics().find((d) => d.key === "renamed-alias")?.droppedModels ?? []).includes("qwen4-max-preview"),
+  routeModelDiagnostics().find((d) => d.key === "renamed-alias"));
+releaseRenamed();
 
 releaseNew();
 

@@ -3,6 +3,37 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 内核 ux-v53：别名按 id 钉死 + 合并结果按 poolId 去重（2026-11-26）
+
+### 症状
+Muse 用 alias-first 顺序的 fixture 复查 ux-v52 时发现：若 alias 路由（`qmodel_latest` /
+`gmodel_latest`）先于 canonical 路由（`qwen4-max` / `glm-5.4`）注册，别名会先各成一组，
+canonical 后到时 `curatedKeyOf` 的名称 slug 兜底把两组 poolId 都改写成同一个值，但
+`buildModels` 对 groups 直接 `map`、不按 poolId 去重 → `/v1/models` 出现**两条同名**
+`qwen4-max` / `glm-5.4`，请求第二条永远 `402 pool_exhausted`。ux-v52 的 4 条断言在
+canonical-first 顺序下全过，抓不住这个顺序依赖。本机已用独立复现脚本确认 duplicates=2。
+
+另：ux-v52 只靠 display name 模糊匹配，上游哪天把 `qmodel_latest` 的 display name 改掉，
+别名就悄悄掉出池且无报错。
+
+### 变更
+- `lib/shared/pool.js` 的 `ID_ALIASES` 新增两行：`["qmodel_latest","qwen4-max"]`、
+  `["gmodel_latest","glm-5.4"]`，按 id 直接钉到白名单条目，合并走 id 键 —— 上游改
+  display name 不影响这两个已知别名；名称 slug 兜底只保留给未知别名。
+- `mergedModelGroups` 的 curated 循环后、sort 前，加按 poolId 去重合并（`mergedByPoolId`
+  Map：相同 poolId 的 group 把 candidates/names/ids 并入第一个，重算 power）。保证
+  canonical-first 与 alias-first 结果一致，输出无重复。
+- `scripts/check-pool-core.mjs` 新增 4 条 ux-v53 断言（68 → 72 项）：上游改 display name
+  后仍凭 ID 别名合并（display 写成 `Qwen-4-Max-Latest-Pointer` 验证不靠 fuzzy）、
+  `mergedModelGroups` 输出 poolId 无重复（唯一性不变量，与注册顺序无关）、名称变体
+  `Qwen4-Max Preview` 不并进 `qwen4-max`（归一化不跨词）。
+- `scripts/check-all.mjs` 加 7 条静态闸（ID_ALIASES 两行、去重块两条、3 条断言标签）。
+- 内核 `patch` ux-v52 → ux-v53，`package.json` 1.0.16 → 1.0.17。
+
+### 试过但回退：tier 4 内「同族新一代优先」排序
+见 ux-v52 条目。结论维持：power 交错会成环，非全序；若要做，排序键须是
+`familyPower 降序 → genOf 降序 → power 降序 → index 升序`（产品决策，暂不采纳）。
+
 ## 内核 ux-v52：钉死上游指针别名的名称合并（2026-11-26）
 
 ### 症状

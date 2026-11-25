@@ -90,7 +90,7 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v52"', "内核版本标记已升 ux-v52");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v53"', "内核版本标记已升 ux-v53");
 // ux-v42：latch 让位条件必须是两级排序（当日桶 + 更早到期），不能退回只看 expiring 的窄条件。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "function ranksBefore", "两级排序比较器在位（ranksBefore）");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "!burnsToday && !balanceAnchors.has(head.routeKey) && !ranksBefore(head, ordered[at])", "latch 让位同时看当日桶、均衡锚点与更早到期");
@@ -166,6 +166,17 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "qwen4", "能力打分认 qwe
 mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v52 qmodel_latest 凭名称合并进 qwen4-max 组", "别名合并断言在位");
 mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v52 gmodel_latest 凭名称合并进 glm-5.4 组", "gmodel 别名合并断言在位");
 mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v52 已合并的别名不出现在 droppedModels（只有陌生名 stranger_alias 被滤）", "别名不落 droppedModels 断言在位");
+
+// ux-v53：别名改成按 id 钉死（display name 会漂移），且合并结果必须按 poolId 去重 ——
+// alias-first 注册顺序下同一白名单 id 会散成两个 group，不去重则 /v1/models 出现两条同名，
+// 第二条永远 402 pool_exhausted。Muse 用 alias-first fixture 指出，本机已复现。
+mustContain(path.join(ROOT, "lib/shared/pool.js"), '["qmodel_latest", "qwen4-max"]', "qmodel_latest 按 id 钉到 qwen4-max");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), '["gmodel_latest", "glm-5.4"]', "gmodel_latest 按 id 钉到 glm-5.4");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "const mergedByPoolId = new Map();", "合并结果按 poolId 去重");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "const deduped = [...mergedByPoolId.values()].map((entry) => ({ ...entry, power: strengthOf(entry.g) }));", "去重后重算 power 再排序");
+mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v53 上游改 display name 后 qmodel_latest 仍凭 ID 别名并入 qwen4-max", "ux-v53 改名回归断言在位");
+mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v53 mergedModelGroups 输出 poolId 无重复（唯一性不变量，与注册顺序无关）", "ux-v53 poolId 唯一性不变量断言在位");
+mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v53 名称变体 Qwen4-Max Preview 不并进 qwen4-max（归一化不跨词）", "ux-v53 名称变体边界断言在位");
 
 // ux-v29：路由「莫名其妙掉了」的三处根因回归闸。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "deepseek-v4-flash-official", "Trae 兜底 id 进白名单（不再静默过滤）");
