@@ -48,6 +48,11 @@
   不与已有号重复、连续 rotate 不重号、空 key 直通不写表、坏台账当空表重建、无 tmp 残留、
   0600 权限）。`@deepseek-ai/dsh-home-paths` 在独立 node 下解析不到时自动注册 resolve 钩子
   替身，被测 get/rotate 只碰 node:fs 与 node:crypto，不调用宿主 API。
+- `scripts/check-checkin-claim.mjs` —— 起本地 HTTP 服务器伪装 Trae 账号网关、喂脚本化响应的
+  23 项 `claimDailyCheckin` 接线断言（ux-v45）：全链路用签到设备号而非会话 deviceId、
+  9074/9095 设备门恰好触发一次 rotate 并落盘、code 0 但余额未增标「余额未增加」、
+  **余额接口读不到标「未校验到账」**、已签过不重复 claim。宿主包（@deepseek-ai/* 与
+  @earendil-works/*）独立 node 下解析不到时自动换成最小替身。
 
 只想跑一部分时用 `npm run check:syntax` / `npm run check:imports` / `npm run check:core`。
 

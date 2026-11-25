@@ -29,7 +29,7 @@
   },
   "main": "lib/index.js",
   "scripts": {
-    "check": "node scripts/check-all.mjs && node scripts/check-imports.mjs && node scripts/check-pool-core.mjs && node scripts/check-hardening.mjs && node scripts/check-qoder-vault.mjs && node scripts/check-checkin-device.mjs",
+    "check": "node scripts/check-all.mjs && node scripts/check-imports.mjs && node scripts/check-pool-core.mjs && node scripts/check-hardening.mjs && node scripts/check-qoder-vault.mjs && node scripts/check-checkin-device.mjs && node scripts/check-checkin-claim.mjs",
     "check:syntax": "node scripts/check-all.mjs",
     "check:imports": "node scripts/check-imports.mjs && node scripts/check-imports.mjs --selftest",
     "check:core": "node scripts/check-pool-core.mjs",

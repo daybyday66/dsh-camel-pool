@@ -3,6 +3,28 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 内核 ux-v45：签到到账校验不再被余额接口故障静默绕过（2026-11-25）
+
+### 症状
+
+面板显示「签到成功」，但 Trae 余额接口（消费明细）偶发 500 / 超时，导致
+claim 返回 code 0 之后 remainBefore / remainAfter 读不到。旧代码只在两个
+余额都拿到时才比增量，读不到就直接放行 —— 「code 0 不等于真到账」的防线
+被静默跳过，面板会把一次没核实到账的 claim 当成已到账。
+
+### 修复
+
+- `lib/providers/trae/index.js` 的 `claimDailyCheckin`：余额任一侧读不到时，
+  不再静默，显式带 `note: "服务端返回成功，但余额接口读不到，本次未校验到账
+  （code 0 不等于真到账）"`，`credited` 留空。
+- 新增 `scripts/check-checkin-claim.mjs`：起本地 HTTP 服务器伪装 Trae 账号
+  网关，喂脚本化响应，覆盖 23 项断言 —— 全链路用签到设备号（不是会话 deviceId）、
+  9074/9095 设备门恰好触发一次 rotate 并落盘、code 0 但余额没涨标「余额未增加」、
+  **余额读不到标「未校验到账」**（ux-v45 修复点）、已签过不重复 claim。
+- 宿主包（@deepseek-ai/* 与 @earendil-works/*）在独立 node 下解析不到，
+  脚本用 `module.register` 注册 resolve 钩子换成最小替身；CI 里能解析真实包
+  时自动跳过替身。
+
 ## 内核 ux-v44：Trae 签到设备号与会话身份分离（2026-11-25）
 
 排查「trae 调用不了」时顺带撞见的第二个 bug，与 ux-v43 的 UA 无关。
