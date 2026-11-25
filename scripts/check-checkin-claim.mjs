@@ -149,23 +149,28 @@ const baseCredential = (port, deviceId) => ({
   } finally { server.close(); }
 }
 
-// B：9074 设备门 -> rotate 换号一次 -> 成功
+// B：9074 设备门 -> rotate 换号一次 -> 成功。
+//   余额按**账号级**建模（真实上游 x-device-id 不影响 usage_summary），
+//   只有 claim 真正成功才让 consumed 2700 -> 2600，credited===100 才能证明
+//   「换号重试后真的到账了」，而不是 mock 用不同基数算出来的假通过。
 {
   let sawGate = false;
+  let consumed = 2700;
   const { server, calls, port } = await startMock((path, deviceId) => {
     if (path === CLAIM_PATH) {
       if (deviceId === 'DEV_A') { sawGate = true; return { json: { code: 9074, message: 'gate' } }; }
+      consumed = 2600; // 换号后 claim 成功 -> 余额真实 +100
       return { json: { code: 0 } };
     }
-    if (path === STATUS_PATH) return { json: { enable: true, checked_in: deviceId !== 'DEV_A', credits: 100 } };
-    if (path === USAGE_PATH) return { json: { usage_summary: { total_amount: 4700, consumed_amount: deviceId === 'DEV_A' ? 2700 : 2600 } } };
+    if (path === STATUS_PATH) return { json: { enable: true, checked_in: false, credits: 100 } };
+    if (path === USAGE_PATH) return { json: { usage_summary: { total_amount: 4700, consumed_amount: consumed } } };
     return { json: {} };
   });
   try {
     const made = makeClient(port, { 'user-1': 'DEV_A' });
     const res = await made.client.claimDailyCheckin(baseCredential(port, 'DEV_A'));
     assert(res.state === 'claimed', 'B state claimed');
-    assert(res.credited === 100, 'B credited === 100');
+    assert(res.credited === 100, 'B credited === 100（换号重试后真到账）');
     const claimCalls = calls.filter((c) => c.path === CLAIM_PATH);
     assert(claimCalls.length === 2, 'B 9074 后只重试一次（共两次 claim）');
     assert(claimCalls[0].deviceId === 'DEV_A', 'B 第一次用旧号');
@@ -222,6 +227,32 @@ const baseCredential = (port, deviceId) => ({
     const res = await made.client.claimDailyCheckin(baseCredential(port, 'DEV_A'));
     assert(res.state === 'already-claimed', 'E already-claimed');
     assert(calls.filter((c) => c.path === CLAIM_PATH).length === 0, 'E 不打 claim');
+  } finally { server.close(); }
+}
+
+// F：9095 设备门 -> 同样 rotate 一次后成功（和 B 共用 CHECKIN_DEVICE_GATE_CODES，单独锁一条回归闸）。
+{
+  let sawGate = false;
+  let consumed = 2700;
+  const { server, calls, port } = await startMock((path, deviceId) => {
+    if (path === CLAIM_PATH) {
+      if (deviceId === 'DEV_A') { sawGate = true; return { json: { code: 9095, message: 'device already checked in today' } }; }
+      consumed = 2600;
+      return { json: { code: 0 } };
+    }
+    if (path === STATUS_PATH) return { json: { enable: true, checked_in: false, credits: 100 } };
+    if (path === USAGE_PATH) return { json: { usage_summary: { total_amount: 4700, consumed_amount: consumed } } };
+    return { json: {} };
+  });
+  try {
+    const made = makeClient(port, { 'user-1': 'DEV_A' });
+    const res = await made.client.claimDailyCheckin(baseCredential(port, 'DEV_A'));
+    assert(res.state === 'claimed', 'F state claimed');
+    assert(res.credited === 100, 'F credited === 100');
+    const claimCalls = calls.filter((c) => c.path === CLAIM_PATH);
+    assert(claimCalls.length === 2, 'F 9095 后只重试一次');
+    assert(sawGate === true, 'F 确实撞到 9095');
+    assert(claimCalls[1].deviceId !== 'DEV_A', 'F 换新号');
   } finally { server.close(); }
 }
 

@@ -90,7 +90,7 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v45"', "内核版本标记已升 ux-v45");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v46"', "内核版本标记已升 ux-v46");
 // ux-v42：latch 让位条件必须是两级排序（当日桶 + 更早到期），不能退回只看 expiring 的窄条件。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "function ranksBefore", "两级排序比较器在位（ranksBefore）");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "!burnsToday && !ranksBefore(head, ordered[at])", "latch 让位同时看当日桶与更早到期");
@@ -114,6 +114,11 @@ mustContain(path.join(ROOT, "lib/panel.js"), ".codearts-accounts.json", "渠道�
 // 否则 code 0 但额度没进账的情况会被面板当成已到账。由 check-checkin-claim.mjs 兜底。
 mustContain(path.join(ROOT, "lib/providers/trae/index.js"), "本次未校验到账", "余额读不到时标未校验 note");
 mustContain(path.join(ROOT, "scripts/check-checkin-claim.mjs"), "claimDailyCheckin", "claim 接线层 mock 闸在位");
+// ux-v46：note 必须从服务端一路透到面板。normalizeClaim 旧代码只认 payload.message，
+// 把 trae 的「未校验到账 / 余额未增加」（都在 note 里）丢掉；手动签到成功分支也不读 body.note。
+mustContain(path.join(ROOT, "lib/panel.js"), 'typeof payload.note === "string"', "normalizeClaim 优先取 payload.note");
+mustCount(path.join(ROOT, "lib/client.js"), "setNote(body.note)", 2, "trae/qoder 手动签到成功分支透 note");
+mustContain(path.join(ROOT, "scripts/check-checkin-claim.mjs"), "9095", "claim 测试覆盖 9095 设备门");
 
 // ux-v29：路由「莫名其妙掉了」的三处根因回归闸。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "deepseek-v4-flash-official", "Trae 兜底 id 进白名单（不再静默过滤）");

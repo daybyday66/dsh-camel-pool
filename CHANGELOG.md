@@ -3,6 +3,43 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 内核 ux-v46：签到结果的 note 从服务端一路透到面板（2026-11-25）
+
+### 症状
+ux-v45 修了「claim 成功但余额接口读不到」会静默放过的问题，但补的 `note`
+（「本次未校验到账」「余额未增加」）只存在于插件返回值里，**面板上永远看不到**：
+
+- 一键签到：`lib/panel.js` 的 `normalizeClaim` 只从 `payload.message` 取文案，
+  插件给的 `payload.note` 在归一化时就被丢掉，下游 `mergeClaim` 拿到的结果里根本没有 note。
+- 单渠道手动点签到：`lib/client.js` 三处 `onCheckin` 成功分支（trae / workbuddy /
+  qoder meta line）直接 `setClaim("done")`，不读 `body.note`。
+- 顺带：`credited`（签到到账的额度增量）全仓库没有任何面板消费方，面板上连 "+100"
+  都不显示——本轮先修 note 透出，credited 展示留作后续。
+
+### 根因
+服务端返回的签到结果是 `{ state, note, credited }`，面板归一化只认 `message`、
+手动签到只认失败分支的 `message`，成功分支的 note 全链路没人接。
+
+### 变更
+- `lib/panel.js` `normalizeClaim`：`note` 改为 `payload.note ?? payload.message`，
+  覆盖一键签到 sweep 和单渠道行内点击（都走 `mergeClaim`）两条路径。
+- `lib/client.js` 三处 `onCheckin` 成功分支：读 `body.note` 进 note state，done
+  态把它当 tooltip（hover 可见）。失败分支行为不变。
+- 测试修复（`scripts/check-checkin-claim.mjs`）：场景 B 的 USAGE mock 之前按 deviceId
+  给不同余额基数（旧号 2700 / 新号 2600），导致 `credited===100` 是「换号换基数」算出来的
+  **假通过**，并不是 claim 真挣来的——而真实上游余额是账号级，x-device-id 不影响
+  usage_summary。改成账号级有状态余额：只有 claim 成功才 `consumed 2700→2600`，
+  `credited===100` 才真正证明「换号重试后到账了」。STATUS mock 也去掉了误导性的
+  deviceId 分叉，统一返回 `checked_in:false`。
+- 新增场景 F：9095 设备门和 9074 共用 `CHECKIN_DEVICE_GATE_CODES`，单独锁一条回归闸
+  （撞 9095 → rotate 一次 → 成功）。`check-checkin-claim` 断言 23 → 28。
+
+### 自检
+- `npm run check` 全绿：check-all（含 ux-v46 三条静态闸）/ check-imports /
+  check-pool-core（39）/ check-hardening / check-qoder-vault（14）/
+  check-checkin-device（12）/ check-checkin-claim（28）。
+- 真机：重载后 `GET /plugins/dsh-pool/status` 的 `patch` 升至 ux-v46。
+
 ## 内核 ux-v45：签到到账校验不再被余额接口故障静默绕过（2026-11-25）
 
 ### 症状
