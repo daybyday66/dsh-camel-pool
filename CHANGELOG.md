@@ -3,6 +3,109 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 内核 ux-v44：Trae 签到设备号与会话身份分离（2026-11-25）
+
+排查「trae 调用不了」时顺带撞见的第二个 bug，与 ux-v43 的 UA 无关。
+
+### 症状
+
+同一台机器上两个 Trae 账号（trae / trae2）只有先签的那个号能到账。第二个号点签到，要么回 `9074 当前参与用户太多，请稍后再试`，要么回 `code 0` 但余额一分不涨；面板两种都显示「已领取」。
+
+### 根因（2026-11-25 实测）
+
+签到接口有两层门，`x-device-id` 都参与判定：
+
+1. `checked_in` —— **账号级**：该号今天领没领；
+2. `did_checked_in` —— **设备级**：这台设备今天签没签；
+3. 每人每天封顶 100 —— 同号当天第二次领，换什么设备号都回 `code 0` 空转。
+
+`9074` 看着像排队，实测是**发券资格层按设备判**：同一个 token 换成当天没签过的设备号，立刻 `code 0` 且 `+100` 到账（请求头、machineId、UA、Origin 都试过，都不是变量）。而凭据里的 `deviceId` 是**会话身份**、与私钥配对，动它就会把同机另一条链顶成 `20403`。所以不能拿会话 deviceId 去顶设备门。
+
+### 变更
+
+1. 新增 `lib/providers/trae/checkin-device.js`：`$DSH_HOME/.trae-checkin-devices.json` 台账（`{"<userId>":"<deviceId>"}`），`get` / `rotate`，tmp+rename 原子写 0600，坏文件当空表。
+2. `lib/providers/trae/index.js`：新增 `CHECKIN_DEVICE_GATE_CODES = Set([9074, 9095])`；`checkinCredential()` 读状态用签到设备号；`claimDailyCheckin()` 先用签到号读状态 → 未签才 claim → 撞 9074/9095 就 `rotate` 换号重试一次 → 成功后比 `remain` 增量，`credited === 0` 时写 `note`「服务端返回成功但余额未增加：该账号今天已经领过了」，不再假报成功。
+3. `lib/panel.js`：`candidatePaths` 为 `codearts` 补 `.codearts-accounts.json` / `.codearts-auth.json`。不补则 `slotConfigured` 恒为 `false` —— 渠道页看不到 codearts、一键签到永远跳过它。
+4. `package.json` 1.0.10；新增 `scripts/check-checkin-device.mjs` 运行时闸并接进 `npm run check`。
+
+### 自检
+
+`npm run check` 全绿。`check-checkin-device.mjs` 12 项（真实 import + 临时台账）：导出面、首次 get 登记 fallback 并落盘、已有值不被覆盖、两账号隔离、rotate 换号/落盘/不动他人、不与已有号重复、连续 rotate 不重号、空 key 直通且不写表、坏台账当空表重建、无 tmp 残留、0600 权限。静态层 `check-all.mjs` 加 8 条闸。
+
+真机：两号签到设备号分离（`1729384655102837` / `4180492747601067`），trae 签到 `checkedIn: true`、`+100` 到账、`remain 2126.48/4700`。
+
+## 内核 ux-v43：直连通道换成非 undici 的 User-Agent（2026-11-25）
+
+用户原话：*「为什么 trae 调用不了，限流是什么原因，之前都好好的」*。
+
+### 症状
+
+`.pool-route.log` 里 trae / trae2 从 2026-11-24T08:36Z 起是 **121 次尝试 / 121 次失败**，零成功；轮转前的 `.pool-route.log.1` 里最后一次成功是 2026-11-20T08:29Z（历史 674 次 served）。失败原文逐字一致：
+
+```
+trae upstream (http 502): We're sorry, your requests have exceeded the rate limit. Please wait and try again later.
+```
+
+池因此一路降级：deepseek-v4.1-flash 的尝试落在 workbuddy:workbuddy2（359 次）、codearts（356 次，几乎全失败）、trae2（78）、trae（76）。
+
+### 根因（不是限流，不是号，不是 IP）
+
+同一 token、同一 endpoint、同一 payload、同一台机器（出口 IP 恒 101.71.37.28），**只改 User-Agent**：
+
+| UA | 结果 |
+| --- | --- |
+| `undici`（undici.fetch 默认值） | HTTP 200，但 SSE 首事件就是 `{"code":4011,"message":"...exceeded the rate limit..."}`，响应体 189B |
+| （不发 UA） | 同样 4011 |
+| `curl/8.4.0` / `Go-http-client/2.0` / `python-requests/2.31` | 同样 4011 |
+| `node`（Node 内建 fetch 默认值） | 正常 SSE，9K~25K |
+| `TraeIDE/3.4.2` / `dsh-camel-pool/1.0.9` | 正常 SSE |
+
+交替 4 轮 undici/node 稳定复现。结论：**Trae 网关按 UA 把裸 HTTP 客户端认出来，回 4011 伪装成限流**；4011 与真正的鉴权失败（HTTP 401 `code:1001`）是两回事。插件自 2026-11-16 起在 net-rescue 里改用 `undici.fetch` 做直连（为了绕开宿主 env 代理），从那一刻起就带上了 `UA: undici`。
+
+### 变更
+
+1. `lib/shared/net-rescue.js`：新增 `DEFAULT_USER_AGENT`（默认 `"node"`，可用 `DSH_POOL_USER_AGENT` 覆盖）与 `withDefaultUserAgent(input, options)`。
+2. `directFetch` 在「undici 分支 / 裸 node:https 分支」**分叉之前**就补默认 UA —— undici 不补会自己塞 `undici`，裸分支压根不发；补在分叉前两条走法才一致。
+3. `rawDirectFetch` 内部对最终的 headers 再兜一次（`input` 自带的 headers 也算调用方给的）；**调用方显式给了 `User-Agent` 就绝不覆盖**。
+4. `fetchRescueInfo()` 增加 `userAgent` 字段，状态端点能直接看到当前值。
+5. `lib/providers/pool/index.js` 内核标记 `ux-v42` → `ux-v43`。
+
+### 自检
+
+`npm run check` 全绿。`check-all.mjs` 与 `check-hardening.mjs` 各加三条静态闸（`const DEFAULT_USER_AGENT =` 在位、`withDefaultUserAgent(input, raw)` 在 `directFetch` 分叉前、裸分支的 `user-agent` 兜底在位），版本契约改到 `ux-v43`。真机复验：不带 UA 直接 `directFetch` 打 Trae 网关连 3 轮全部正常出流；显式传 `User-Agent: undici` 仍 4011（证明不覆盖调用方值是生效的）。
+
+## 内核 ux-v42：最早过期优先，粘性不许插队（2026-11-25）
+
+用户原话：*「第一，本质调用路由是按过期时间；第二因为 codearts 当天过期，所以每天优先调用它；第三，消耗完 codearts 当天过期的 100 分后，就继续按积分过期时间来调用，比如这回 trae 过期时间分明就是比 workbuddy 早，但你不调用 trae 的模型，就是你的问题了」*。
+
+### 症状
+
+`.pool-route.log` 里 `deepseek-v4.1-flash` 的尝试分布极不均衡：workbuddy:workbuddy2 命中 359 次、codearts 356 次（后者几乎全是 `400 CodeArts 免费档同时只允许 3 个会话` 与 `华为侧共享 TPM 超限` 失败），而 11-30 到期的 trae / trae2 分别只有 76 / 78 次。总积分还能用，但快到期的额度在闲置，晚到期的额度在狂烧。
+
+### 根因
+
+排序内核 `routeRank` 本来就是 `[expiryMs, priority, index]`，方向是对的。问题在**粘性 latch 的让位条件太窄**：ux-v14 只让它给 `expiring > 0`（当日桶）的头部块让位，而 workbuddy2 的 `expiring` 是 undefined —— 于是 `latch = {"deepseek-v4.1-flash": "workbuddy:workbuddy2"}` 把它顶到 expiring 块之后、trae 之前；它一成功就 `setLatch` 自我续期，形成闭环。结果「最早过期优先」在排序层成立、在最终顺序上被粘性推翻。
+
+### 变更（三个文件）
+
+1. `lib/shared/pool.js`：新增 `function ranksBefore(a, b)`，只比 `routeRank` 的前两级（到期时间、priority），第三级注册序不参与判定——只在注册序上不同的两条路由才算「同一档」。
+2. `lib/shared/pool.js` 的 latch 让位循环改为两级条件：
+   `while (floor < at) { const head = ordered[floor]; const burnsToday = (credits.get(head.routeKey)?.expiring ?? 0) > 0; if (!burnsToday && !ranksBefore(head, ordered[at])) break; floor += 1; }`
+   即头部路由要么「有当日桶」，要么「到期更早」，latch 都必须让位；两者都不满足才停在它后面。
+3. `lib/providers/pool/index.js` 内核标记 `ux-v41` → `ux-v42`。
+
+`burnExpiringFirst: false` 的旧行为（粘性压过一切）保持不变。
+
+### 效果（对应三条要求）
+
+- ① 路由本质按过期时间：`credits-first` 的第一级就是 `expiryMs`，粘性只能在同档内换先后；
+- ② CodeArts 当天过期：`expiring > 0` 让它的 `expiryMs` 被拉近到当日 24:00，加上让位条件的第一条，它每天必然排最前；
+- ③ 烧完当日 100 分后：`expiring` 归 0，CodeArts 退回自己的套餐期末，顺序回到纯「到期时间 → priority」，11-30 到期的 trae/trae2 自然排在 12-05 的 workbuddy2 之前。
+
+### 自检
+
+`npm run check` 全绿。`check-pool-core.mjs` 扩到 39 项，新增三条：⑤ 拆成「让位给当日桶」+「不得越过更早到期」；⑤b 同档粘性仍生效（同为 11-30 到期、priority 1 的 tie-a/tie-b）；⑤c 真实形状回归（trae 必须排在 wb2 之前，wb2 排在 wb1 之前）。`check-all.mjs` 加两条静态闸（`ranksBefore` 在位、让位条件含 `!burnsToday && !ranksBefore`），并把版本契约改到 `ux-v42`。
+
 ## 内核 ux-v41：续期成功的两种掉线通道（2026-11-24）
 
 ux-v40 修好了「失败一次就判死」，但 `refresh_token` 是**一次性轮换**的 —— 拿到了新 token 却没落盘，下场和续期失败一样：旧的那枚已作废，之后每次续期都是 `invalid_grant`，整个 family 判死。还剩两条这种通道：
