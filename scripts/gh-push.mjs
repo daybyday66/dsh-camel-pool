@@ -253,6 +253,14 @@ async function graftHead({ full, token, headSha, remoteSha }) {
   const remoteCommit = await api("/repos/" + full + "/git/commits/" + remoteSha, {}, token);
   const remoteTreeSha = remoteCommit.tree.sha;
   const remoteTree = await api("/repos/" + full + "/git/trees/" + remoteTreeSha + "?recursive=1", {}, token);
+  /**
+   * GitHub 的 recursive=1 在大仓库上会截断（truncated: true）。截断时 remoteBlobs 不全，
+   * 「远端有、本地没有」的判定就会漏掉真实存在的路径 —— 表现出来是远端残留旧文件而脚本
+   * 自称同步成功。宁可中止，也不要把不完整的树当完整树用。
+   */
+  if (remoteTree.truncated) {
+    throw new Error("远端树被 GitHub 截断（truncated=true），无法可靠判定待删除路径；请先在本机 git fetch origin 取回远端历史后重试");
+  }
   const remoteBlobs = new Map();
   for (const item of remoteTree.tree ?? []) {
     if (item.type === "blob") remoteBlobs.set(item.path, item.sha);
@@ -323,6 +331,10 @@ async function main() {
   const { full } = repoInfo();
   const token = readToken();
   const headSha = git(["rev-parse", "HEAD"]).trim();
+  // graft 用 git cat-file 读本地 blob；浅 clone 里缺失的历史 blob 会让上传报 not our ref。
+  if (git(["rev-parse", "--is-shallow-repository"]).trim() === "true") {
+    note("提示：当前是浅 clone，graft 需要的历史 blob 可能取不到；建议先 git fetch --unshallow 再同步");
+  }
 
   if (tryGitPush()) {
     note("同步完成（git push）：" + headSha.slice(0, 8));
