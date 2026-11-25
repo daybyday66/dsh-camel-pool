@@ -3,6 +3,36 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 内核 ux-v49：均衡报告只呈现可均衡的档 + 补 3 条精确回归（2026-11-25）
+
+### 症状
+ux-v48 交付后 Muse 复核（逻辑层）通过，但指出四点：① 缺 ux-v48 真 bug 的精确回归断言
+（3 路由档 + latch 播种在非锚点，同一轮里锚点必须仍排在 latch 前）；② 缺反向分支
+（balancedTo === latch 时粘性不被跳过）；③ 缺 report 过滤：单路由档没有均衡意义，
+codearts 当日桶曾因 balanceCurrent 历史残留出现在 pool.balance，被误读成均衡在它上面
+生效；④ 缺孤儿指针回归（档内路由被删后 balanceCurrent 指向不存在路由）。
+
+### 根因
+- creditBalanceReport() 只遍历 balanceCurrent，不校验该 tier 当前还剩几条路由，
+  也不校验 routeKey 是否还在注册表 —— 单条档与已下线路由的残留条目都会透出。
+- ux-v48 的修法只被 11 条断言间接覆盖，没有一条精确复现「3 路由 + latch 非锚点」形状。
+
+### 变更
+- lib/shared/pool.js 的 creditBalanceReport()：按注册表实时统计每个 tier 的路由数，
+  只呈现 ≥2 条且 routeKey 仍在注册表的档。只过滤呈现，不删 balanceCurrent 记忆 ——
+  路由增删回到 ≥2 条时原来的选择照样能用，unregister 清记忆的路径不变。
+- 测试 scripts/check-pool-core.mjs 新增 3 条（58 → 61）：
+  - ux-v49 3 路由档 latch 播种非锚点，均衡锚点仍排前（bug 回归）—— ux-v48 真 bug 的精确复现；
+  - ux-v49 档内只剩 1 条后从 report 过滤掉 —— 单条档不再进报告；
+  - ux-v49 balancedTo===latch 时粘性正常生效 —— 反向分支不崩、首位仍是锚点。
+- scripts/check-all.mjs：版本闸升 ux-v49，加 4 条 ux-v49 静态闸（report 过滤单条档 /
+  孤儿指针 / 两条测试断言在位）。
+- 版本 1.0.12 → 1.0.13，patch ux-v48 → ux-v49。
+
+### 未做的（Muse 建议但本轮不动）
+- 云端独立 clone 复跑 npm run check：本次 Muse 侧因执行风险检查停下，只做逻辑复核；
+  本机 npm run check 全绿 + 真机切流（trae 1936 vs 3372，差 1436 > 300 切到 trae2）仍是有效证据。
+
 ## 内核 ux-v48：均衡报告覆盖全档 + 粘性不越过同档均衡锚点（2026-11-25）
 
 ### 症状

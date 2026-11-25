@@ -402,6 +402,47 @@ ok("ux-v48 注销当前首选后该档从报告消失", repAfter.length === 1, c
 releaseRepA();
 const repGone = creditBalanceReport().filter((i) => i.routeKey === "rep-a");
 ok("ux-v48 注销后 balanceCurrent 清记忆", repGone.length === 0, creditBalanceReport());
+
+// ---- ux-v49：Muse 复核补测（精确回归 + report 过滤 + 反向分支） ----
+// ① 精确回归：3 路由档，latch 播种到非锚点，均衡锚点仍排在 latch 前面
+//    （ux-v48 真 bug 的精确复现：floor 在同档非锚点路由处提前 break，把 latch 插到锚点前）
+const rgA = { doc: { status: "signed-in", credits: { remaining: 1000, total: 4000, endTime: BAL_END } } };
+const rgB = { doc: { status: "signed-in", credits: { remaining: 1000, total: 4000, endTime: BAL_END } } };
+const rgC = { doc: { status: "signed-in", credits: { remaining: 5000, total: 4000, endTime: BAL_END } } };
+const releaseRgA = registerPoolRoute(fakeBalanceRoute("rg-a", 1, "bal-reg", rgA));
+const releaseRgB = registerPoolRoute(fakeBalanceRoute("rg-b", 1, "bal-reg", rgB));
+const releaseRgC = registerPoolRoute(fakeBalanceRoute("rg-c", 1, "bal-reg", rgC));
+await refreshPoolCredits({ force: true, only: ["rg-a", "rg-b", "rg-c"] });
+orderedRoutesFor(MODEL, {}); // 先跑一次，均衡把 rg-c 设为锚点
+setLatch(MODEL, "rg-a"); // latch 播种到非锚点
+const regKeys = orderedRoutesFor(MODEL, {}).map((i) => i.routeKey).filter((k) => k.startsWith("rg-"));
+ok("ux-v49 3 路由档 latch 播种非锚点，均衡锚点仍排前（bug 回归）", regKeys.join(",") === "rg-c,rg-a,rg-b", regKeys);
+releaseRgA(); releaseRgB(); releaseRgC();
+
+// ② report 过滤单条档：同档注销到只剩 1 条后，该档从 report 消失（无均衡意义）
+const sA = { doc: { status: "signed-in", credits: { remaining: 2000, total: 4000, endTime: BAL_END } } };
+const sB = { doc: { status: "signed-in", credits: { remaining: 1800, total: 4000, endTime: BAL_END } } };
+const releaseSA = registerPoolRoute(fakeBalanceRoute("sg-a", 1, "bal-single", sA));
+const releaseSB = registerPoolRoute(fakeBalanceRoute("sg-b", 1, "bal-single", sB));
+await refreshPoolCredits({ force: true, only: ["sg-a", "sg-b"] });
+orderedRoutesFor(MODEL, {});
+ok("ux-v49 两条同档时进 report", creditBalanceReport().some((i) => i.routeKey === "sg-a"), creditBalanceReport());
+releaseSB(); // 注销非首选，档内只剩 1 条
+ok("ux-v49 档内只剩 1 条后从 report 过滤掉", !creditBalanceReport().some((i) => i.routeKey.startsWith("sg-")), creditBalanceReport());
+releaseSA();
+
+// ③ 反向分支：balancedTo === latch 时粘性不被跳过（不崩，首位是均衡锚点 = latch）
+const vkA = { doc: { status: "signed-in", credits: { remaining: 2000, total: 4000, endTime: BAL_END } } };
+const vkB = { doc: { status: "signed-in", credits: { remaining: 1000, total: 4000, endTime: BAL_END } } };
+const releaseVkA = registerPoolRoute(fakeBalanceRoute("vk-a", 1, "bal-vk", vkA));
+const releaseVkB = registerPoolRoute(fakeBalanceRoute("vk-b", 1, "bal-vk", vkB));
+await refreshPoolCredits({ force: true, only: ["vk-a", "vk-b"] });
+orderedRoutesFor(MODEL, {}); // 均衡选 vk-a 为锚点
+setLatch(MODEL, "vk-a"); // latch 设在锚点上 → balancedTo === latch
+const vkKeys = orderedRoutesFor(MODEL, {}).map((i) => i.routeKey).filter((k) => k.startsWith("vk-"));
+ok("ux-v49 balancedTo===latch 时粘性正常生效", vkKeys.join(",") === "vk-a,vk-b", vkKeys);
+releaseVkA(); releaseVkB();
+
 releaseRepB();
 releaseBalA();
 releaseBalB();

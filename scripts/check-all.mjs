@@ -90,7 +90,7 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v48"', "内核版本标记已升 ux-v48");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v49"', "内核版本标记已升 ux-v49");
 // ux-v42：latch 让位条件必须是两级排序（当日桶 + 更早到期），不能退回只看 expiring 的窄条件。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "function ranksBefore", "两级排序比较器在位（ranksBefore）");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "!burnsToday && !balanceAnchors.has(head.routeKey) && !ranksBefore(head, ordered[at])", "latch 让位同时看当日桶、均衡锚点与更早到期");
@@ -132,6 +132,11 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "balancedElsewhere", "本档�
 mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v48 未换手的档也在 balance 报告里", "ux-v48 观测补齐断言在位");
 mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v48 差值恰好=300 严格不切", "ux-v48 滞回上沿边界断言");
 mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v48 latch 播种 A 后 B 多>300 切走 B", "ux-v48 latch+均衡联动断言");
+// ux-v49：report 只呈现可均衡的档（过滤单条档与孤儿指针），补 3 条精确回归断言。
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "(counts.get(tier) ?? 0) < 2", "report 过滤单条档");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "!registry.some((entry) => entry.route.key === routeKey)", "report 过滤孤儿指针");
+mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v49 3 路由档 latch 播种非锚点，均衡锚点仍排前（bug 回归）", "ux-v49 精确回归断言");
+mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v49 档内只剩 1 条后从 report 过滤掉", "ux-v49 report 过滤断言");
 
 // ux-v29：路由「莫名其妙掉了」的三处根因回归闸。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "deepseek-v4-flash-official", "Trae 兜底 id 进白名单（不再静默过滤）");
