@@ -3,6 +3,32 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 内核 ux-v51：登记上游新上架的模型（glm-5.4 / qwen4-max / kimi-k3.1-pro-highspeed）（2026-11-26）
+
+### 症状
+用户反映「有些路由好像上了新模型」。查 `GET /plugins/dsh-pool/status` 的路由诊断：
+- Trae / Trae2 的 `rawModelCount=20` 但 `modelCount=18`，`droppedModels=["kimi-k3.1-pro-highspeed","qwen4-max"]`
+- WorkBuddy1/2 的 `rawModelCount=17` 但 `modelCount=13`，`droppedModels=["glm-5.4","glm-5.2","minimax-m2.7","kimi-k2.8-preview"]`
+
+被丢掉的原因不是上游没有，而是池的 `mergedModelGroups` 只放行白名单（`CURATED_MODELS`）里的 id，
+新 id 不在表里就被静默过滤 —— 模型在 /v1/models 里彻底消失，请求它只拿到 402 pool_exhausted。
+
+### 变更
+- `lib/shared/pool.js` 的 `CURATED_MODELS` 新增 3 个真新模型（2026-11-26 实测）：
+  - `glm-5.4`（GLM-5.3 的下一代，WorkBuddy / Qoder）
+  - `qwen4-max`（Qwen3.8-Max 的下一代，Trae / Qoder）
+  - `kimi-k3.1-pro-highspeed`（Kimi-K3.1-Pro 高速档，Trae）
+- `strengthOf` 的能力打分正则放宽：`glm-5.3` → `glm-5.[3-9]`（5.4 不再掉档）、`qwen3.8` → 加 `qwen4` 家族。
+- 同批被滤掉的 `glm-5.2` / `minimax-m2.7` / `kimi-k2.8-preview` 是上一代存量，不新增登记（保持
+  「只放行点名模型」的白名单语义），仍在 `droppedModels` 里可见。
+- 真机验证：Trae/Trae2 kept 18→20、WorkBuddy kept 13→14、Qoder kept 8→10，`droppedModels` 里
+  上述三个新 id 消失，/v1/models 总模型 25→28。
+
+### 自检
+- `scripts/check-pool-core.mjs` 新增 4 条 ux-v51 运行时断言：3 个新 id 过白名单、老一代存量仍被滤掉（`droppedModels` 含 glm-5.2 / minimax-m2.7 / kimi-k2.8-preview）。
+- `scripts/check-all.mjs` 加 5 条 ux-v51 静态闸：3 个 id 登记、`glm-5.[3-9]` 与 `qwen4` 打分正则。
+- 内核版本标记 `patch` 升到 ux-v51，`package.json` 1.0.14 → 1.0.15。
+
 ## 内核 ux-v50：同步基建两处真实缺陷（graft 不删文件 / 等长编辑漏提交）（2026-11-26）
 
 ### 症状 A：远端残留已删除的文件

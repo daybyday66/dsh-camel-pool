@@ -443,6 +443,29 @@ const vkKeys = orderedRoutesFor(MODEL, {}).map((i) => i.routeKey).filter((k) => 
 ok("ux-v49 balancedTo===latch 时粘性正常生效", vkKeys.join(",") === "vk-a,vk-b", vkKeys);
 releaseVkA(); releaseVkB();
 
+// ux-v51：上游新上架的 3 个真新模型必须过白名单（否则被静默丢弃），老一代存量仍按原样滤掉。
+const releaseNew = registerPoolRoute({
+  ...fakeRoute("new-models", 1, { status: "signed-in", credits: { remaining: 1, total: 1 } }),
+  models: () => [
+    { id: "glm-5.4", name: "GLM-5.4", contextWindow: 1000000, maxTokens: 32768, input: ["text"] },
+    { id: "qwen4-max", name: "Qwen4-Max", contextWindow: 1000000, maxTokens: 200000, input: ["text"] },
+    { id: "kimi-k3.1-pro-highspeed", name: "Kimi-K3.1-Pro-Highspeed", contextWindow: 1000000, maxTokens: 200000, input: ["text"] },
+    { id: "glm-5.2", name: "GLM-5.2", contextWindow: 1000000, maxTokens: 64000, input: ["text"] },
+    { id: "minimax-m2.7", name: "MiniMax-M2.7", contextWindow: 200000, maxTokens: 48000, input: ["text"] },
+    { id: "kimi-k2.8-preview", name: "Kimi-K2.8-Preview", contextWindow: 1000000, maxTokens: 64000, input: ["text"] },
+  ],
+});
+const newGroups = mergedModelGroups({});
+const newIds = new Set(newGroups.map((g) => g.poolId));
+ok("ux-v51 glm-5.4 过白名单", newIds.has("glm-5.4"), [...newIds].filter((x) => x.startsWith("glm")));
+ok("ux-v51 qwen4-max 过白名单", newIds.has("qwen4-max"), [...newIds].filter((x) => x.startsWith("qwen")));
+ok("ux-v51 kimi-k3.1-pro-highspeed 过白名单", newIds.has("kimi-k3.1-pro-highspeed"), [...newIds].filter((x) => x.startsWith("kimi")));
+const diagNew = routeModelDiagnostics().find((d) => d.key === "new-models");
+ok("ux-v51 老一代存量仍被滤掉（glm-5.2 / minimax-m2.7 / kimi-k2.8-preview）",
+  diagNew?.rawModelCount === 6 && diagNew?.curatedModelCount === 3
+  && ["glm-5.2", "minimax-m2.7", "kimi-k2.8-preview"].every((id) => (diagNew?.droppedModels ?? []).includes(id)), diagNew);
+releaseNew();
+
 releaseRepB();
 releaseBalA();
 releaseBalB();

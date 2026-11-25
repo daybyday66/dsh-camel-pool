@@ -90,7 +90,7 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v50"', "内核版本标记已升 ux-v50");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v51"', "内核版本标记已升 ux-v51");
 // ux-v42：latch 让位条件必须是两级排序（当日桶 + 更早到期），不能退回只看 expiring 的窄条件。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "function ranksBefore", "两级排序比较器在位（ranksBefore）");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "!burnsToday && !balanceAnchors.has(head.routeKey) && !ranksBefore(head, ordered[at])", "latch 让位同时看当日桶、均衡锚点与更早到期");
@@ -153,6 +153,13 @@ mustContain(path.join(ROOT, "scripts/gh-push.mjs"), "无需再 graft", "内容�
 // 4) 远端树被 GitHub 截断时不能当完整树用（会漏删路径、远端留旧文件却自称成功）；浅 clone 提示。
 mustContain(path.join(ROOT, "scripts/gh-push.mjs"), "remoteTree.truncated", "远端树截断时中止，不当完整树用");
 mustContain(path.join(ROOT, "scripts/gh-push.mjs"), "--is-shallow-repository", "浅 clone 给出 graft 取不到 blob 的提示");
+
+// ux-v51：上游新上架的 3 个真新模型必须登记进白名单（否则被 mergedModelGroups 静默丢弃）。
+mustContain(path.join(ROOT, "lib/shared/pool.js"), '["glm-5.4", 4]', "glm-5.4 进白名单");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), '["qwen4-max", 4]', "qwen4-max 进白名单");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), '["kimi-k3.1-pro-highspeed", 4]', "kimi-k3.1-pro-highspeed 进白名单");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "glm-?5\\.[3-9](?![-_. ]?flash)", "能力打分认 glm-5.3 以上版本（5.4 不再掉档）");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "qwen4", "能力打分认 qwen4 家族");
 
 // ux-v29：路由「莫名其妙掉了」的三处根因回归闸。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "deepseek-v4-flash-official", "Trae 兜底 id 进白名单（不再静默过滤）");
