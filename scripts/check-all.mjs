@@ -90,7 +90,7 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "burnExpiringFirst", "latch �
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "poolKindOf", "codearts 错误体归一为池词汇");
 mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "iam_stale", "codearts 区分 IAM 失效");
 mustContain(path.join(ROOT, "lib/providers/pool/index.js"), "structuredFailureKind", "池侧读结构化错误体");
-mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v53"', "内核版本标记已升 ux-v53");
+mustContain(path.join(ROOT, "lib/providers/pool/index.js"), 'patch: "ux-v54"', "内核版本标记已升 ux-v54");
 // ux-v42：latch 让位条件必须是两级排序（当日桶 + 更早到期），不能退回只看 expiring 的窄条件。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "function ranksBefore", "两级排序比较器在位（ranksBefore）");
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "!burnsToday && !balanceAnchors.has(head.routeKey) && !ranksBefore(head, ordered[at])", "latch 让位同时看当日桶、均衡锚点与更早到期");
@@ -177,6 +177,15 @@ mustContain(path.join(ROOT, "lib/shared/pool.js"), "const deduped = [...mergedBy
 mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v53 上游改 display name 后 qmodel_latest 仍凭 ID 别名并入 qwen4-max", "ux-v53 改名回归断言在位");
 mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v53 mergedModelGroups 输出 poolId 无重复（唯一性不变量，与注册顺序无关）", "ux-v53 poolId 唯一性不变量断言在位");
 mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v53 名称变体 Qwen4-Max Preview 不并进 qwen4-max（归一化不跨词）", "ux-v53 名称变体边界断言在位");
+
+
+// ux-v54：面板「永久熔断」与 CodeArts 假当日桶的回归闸。
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "export function breakerSnapshot(now = Date.now())", "熔断快照按 TTL 过滤");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "broken: breakerSnapshot(),", "状态接口改用 TTL 过滤后的快照");
+mustContain(path.join(ROOT, "lib/shared/pool.js"), "export function expiringToday(credit, now)", "当日桶判据 expiringToday 在位");
+mustContain(path.join(ROOT, "lib/providers/codearts/index.js"), "r.endTimeMs <= dayEndMs", "CodeArts 只把今天到期的余额标成当日桶");
+mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v54 已过期的熔断条目不进状态快照", "熔断快照 TTL 断言在位");
+mustContain(path.join(ROOT, "scripts/check-pool-core.mjs"), "ux-v54 套餐期末到期不算当日桶", "当日桶边界断言在位");
 
 // ux-v29：路由「莫名其妙掉了」的三处根因回归闸。
 mustContain(path.join(ROOT, "lib/shared/pool.js"), "deepseek-v4-flash-official", "Trae 兜底 id 进白名单（不再静默过滤）");

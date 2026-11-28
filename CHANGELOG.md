@@ -3,6 +3,48 @@
 本文件记录池内核与面板的行为变更。`patch` 字段（`GET /plugins/dsh-pool/status` 的
 `patch`）就是这里的版本号——面板页脚会把它显示成「内核标记」，两者逐字对应。
 
+## 内核 ux-v54：熔断快照按 TTL 过滤 + CodeArts「当日桶」只算今天到期的余额（2026-11-28）
+
+### 症状
+1. **面板一直显示「熔断 2」**：qoder1/qoder2 在 06:22:55Z 因上游排队（10605 isQueued）记了
+   capacity 熔断，capacity 的 TTL 只有 20 秒，可到 15:00 面板还挂着这两条 —— 已经挂了 8 个
+   多小时。原因是状态接口直接把 `breakers.entries()` 摊开，**不看 TTL**；而这两条路由当前
+   承载的模型不是正在被请求的模型，`breakerActive()` 根本没机会被调到，过期条目就永远留着。
+2. **CodeArts 被当成「今天 16:00 就作废」**：`package_credit_expiring_amount` 是**套餐期末**
+   （periodEnd = 2026-12-03）作废的整包余额（当前 4774.54，等于 remain 全量），旧代码一律把它
+   盖成「今天 Asia/Shanghai 24:00 = 16:00Z」，于是 `expiryMs` 被拉到今天 → 排序键
+   `[expiryMs, priority, index]` 把 CodeArts 钉在所有模型队首。真实更早到期的 trae/trae2
+   （11-30，两天后）反而永远烧不到；CodeArts 又被免费档「同时 3 个会话」硬墙卡住，打断的会话
+   要 ~60 秒才释放，于是每条 deepseek-v4.1-flash 请求都在 codearts 与 trae2 之间来回，
+   并留下 15–30 秒的 `route-inflight-ghost` 延迟（日志里 180 条，全部 codearts）。
+
+### 根因
+- `lib/shared/pool.js` 状态快照：`broken: [...breakers.entries()].map(...)` —— 没有 TTL 过滤，
+  而 `breakerActive()` 只会在路由被真正探测时惰性清理，形成「越没人用越永远熔断」的死角。
+- `lib/providers/codearts/index.js`：`dailyExpiring = rows.reduce(sum(r.expiring))` +
+  `dailyExpiryAt` 硬编码今日 16:00Z，两处都把「套餐期末作废量」当成了「当日作废量」。
+- `lib/shared/pool.js` latch 让位判据 `burnsToday = (expiring ?? 0) > 0` 同样不看日期，
+  于是一个 5 天后才到期的 expiring 也能把 latch 永久压在 CodeArts 上。
+
+### 变更
+- `lib/shared/pool.js` 新增 `breakerSnapshot(now)`：与 `breakerReport()` 同一套 TTL 口径，
+  过期的**顺手从 Map 里删掉**，返回条目多带 `leftMs`；状态接口 `broken` 改用它。
+- `lib/shared/pool.js` 新增 `expiringToday(credit, now)`：`expiring > 0` 且
+  `expiringAtMs <= 今天（Asia/Shanghai）24:00` 才算当日桶；latch 让位判据改用它。
+- `lib/providers/codearts/index.js`：`dailyExpiring` 只累加 `endTimeMs <= 今日 24:00` 的
+  账号行；没有真正今天到期的余额就不写 `expiring/expiringAt`，`expiryMs` 回到套餐期末
+  （12-03），排序自然让 11-30 到期的 trae/trae2 先烧。
+- `scripts/check-pool-core.mjs` 新增 6 条 ux-v54 运行时断言：未过期条目进快照、过期条目不进
+  快照且被清掉、今天到期算当日桶、套餐期末不算当日桶、缺 expiringAt 不算当日桶。
+- `scripts/check-all.mjs` 加 6 条静态闸 + 内核标记 ux-v53 → ux-v54。
+- `package.json` 1.0.17 → 1.0.18。
+
+### 已知遗留（不属本次代码缺陷）
+- CodeArts 免费档「3 个并发会话」是上游硬限制（TM.00001041），被打断的会话要约 1 分钟才释放；
+  ux-v55 的 `route-inflight-ghost` 15–30 秒延迟释放就是为它让路，本版只是让 CodeArts 不再
+  抢队首，从而大幅减少触发次数，不取消该机制。
+- qoder1/qoder2 的 10605「上游排队中（isQueued）」是上游暂时无容量，不是账号问题。
+
 ## 内核 ux-v53：别名按 id 钉死 + 合并结果按 poolId 去重（2026-11-26）
 
 ### 症状

@@ -20,6 +20,9 @@ import {
   mergedModelGroups,
   routeModelDiagnostics,
   creditBalanceReport,
+  noteRouteFailure,
+  breakerSnapshot,
+  expiringToday,
 } from "../lib/shared/pool.js";
 import { HIDE_ALL_SENTINEL } from "../lib/shared/hidden.js";
 
@@ -540,6 +543,29 @@ releaseBalB();
 releaseCodearts();
 releaseTrae();
 releaseQoder();
+
+// ux-v54：两处「面板像坏了」的真因回归闸。
+// ① 状态快照 broken 之前直接摊 breakers.entries()，不看 TTL：一条路由熔断后若不再被探测
+//    （当前模型不在它候选里），20 秒的 capacity 冷却能在面板上挂几个小时，看着像永远熔断。
+// ② CodeArts 把 package_credit_expiring_amount（套餐期末 12-03 才作废的整包余额）一律盖成
+//    今天 16:00Z，当日桶判据因此成立 → 抢队首 → 11-30 到期的 trae/trae2 永远烧不到。
+clearBreakers();
+noteRouteFailure("snapshot-now", "capacity");
+const snapNow = breakerSnapshot();
+ok("ux-v54 未过期的熔断条目进状态快照", snapNow.some((b) => b.key === "snapshot-now" && b.kind === "capacity"), snapNow);
+const snapLater = breakerSnapshot(Date.now() + 21_000);
+ok("ux-v54 已过期的熔断条目不进状态快照", !snapLater.some((b) => b.key === "snapshot-now"), snapLater);
+ok("ux-v54 快照顺手清掉过期条目", !breakerSnapshot().some((b) => b.key === "snapshot-now"), breakerSnapshot());
+clearBreakers();
+
+const uxNow = Date.now();
+const shNow = new Date(uxNow + 8 * 3600_000);
+const todayEnd = Date.UTC(shNow.getUTCFullYear(), shNow.getUTCMonth(), shNow.getUTCDate()) + 16 * 3600_000;
+ok("ux-v54 今天到期的 expiring 算当日桶", expiringToday({ expiring: 100, expiringAtMs: todayEnd }, uxNow) === true);
+ok("ux-v54 套餐期末到期不算当日桶",
+  expiringToday({ expiring: 4774.54, expiringAtMs: todayEnd + 5 * 86400_000 }, uxNow) === false);
+ok("ux-v54 无 expiringAt 的 expiring 不算当日桶", expiringToday({ expiring: 100 }, uxNow) === false);
+
 
 if (failed > 0) {
   console.error("\ncheck-pool-core: " + failed + " 项失败");
