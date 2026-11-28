@@ -25,6 +25,10 @@ import {
   expiringToday,
 } from "../lib/shared/pool.js";
 import { HIDE_ALL_SENTINEL } from "../lib/shared/hidden.js";
+import { readFileSync } from "node:fs";
+
+// 自检封闭性：屏蔽操作员本机 pool-burn-first.json 覆盖层（ee4026d 之后顺序断言必须不受本地配置干扰）
+process.env.DSH_POOL_BURN_FIRST_DISABLE = "1";
 
 let failed = 0;
 function ok(label, cond, extra) {
@@ -565,6 +569,18 @@ ok("ux-v54 今天到期的 expiring 算当日桶", expiringToday({ expiring: 100
 ok("ux-v54 套餐期末到期不算当日桶",
   expiringToday({ expiring: 4774.54, expiringAtMs: todayEnd + 5 * 86400_000 }, uxNow) === false);
 ok("ux-v54 无 expiringAt 的 expiring 不算当日桶", expiringToday({ expiring: 100 }, uxNow) === false);
+
+
+// ── qoder 10605 / isQueued 守卫（ee4026d，s001 裁决加）────────────────
+// 用源码契约断言，不动态 import qoder 模块（它拉 @earendil-works/pi-ai 重依赖，check 该封闭）。
+// 若有人把 isQueuedRejection 的正则改漏 10605、或池分类器不再把 capacity 短路出来，CI 直接红。
+const qSrc = readFileSync(new URL("../lib/providers/qoder/index.js", import.meta.url), "utf8");
+const classifierSrc = readFileSync(new URL("../lib/providers/pool/classifier.js", import.meta.url), "utf8");
+ok("ee4026d: isQueuedRejection 正则含 10605", /\/10605\|/.test(qSrc) || qSrc.includes("10605"), "qoder index missing 10605 token");
+ok("ee4026d: isQueuedRejection 正则含 isQueued", qSrc.includes("isQueued"), "qoder index missing isQueued token");
+ok("ee4026d: isQueuedRejection 出口映射 capacity", /return\s+['"]capacity['"]/.test(qSrc) || qSrc.includes('"capacity"'), "qoder index not returning capacity");
+ok("ee4026d: 池分类器保留 capacity 分类通道", classifierSrc.includes("capacity"), "classifier missing capacity branch");
+ok("ee4026d: 池侧 capacity TTL=20000（BREAKER_TTL_MS）", /capacity\s*:\s*20_?000|capacity\s*:\s*20000/.test(readFileSync(new URL("../lib/shared/pool.js", import.meta.url), "utf8")));
 
 
 if (failed > 0) {
